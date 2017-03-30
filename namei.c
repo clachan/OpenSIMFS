@@ -17,8 +17,17 @@ static int opensimfs_create(
 	return 0;
 }
 
+static struct dentry *opensimfs_lookup(
+	struct inode *dir,
+	struct dentry *dentry,
+	unsigned int flags)
+{
+	return NULL;
+}
+
 struct inode_operations opensimfs_dir_inode_operations = {
 	.create		= opensimfs_create,
+	.lookup		= opensimfs_lookup,
 	.setattr	= opensimfs_notify_change,
 	.get_acl	= NULL,
 };

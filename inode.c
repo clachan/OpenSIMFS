@@ -205,3 +205,96 @@ int opensimfs_getattr(
 {
 	return 0;
 }
+
+static int opensimfs_new_blocks(
+	struct super_block *sb,
+	unsigned long *blocknr,
+	unsigned int num,
+	int zero)
+{
+	struct opensimfs_free_list *free_list;
+	void *bp;
+	unsigned long num_blocks = 0;
+	unsigned long ret_blocks = 0;
+	unsigned long new_blocknr = 0;
+	struct rb_node *temp;
+	struct opensimfs_range_node *first;
+
+	num_blocks = num;
+	if (num_blocks == 0)
+		return -EINVAL;
+
+	free_list = opensimfs_get_shared_free_list(sb);
+	spin_lock(&free_list->s_lock);
+
+	if (free_list->num_free_blocks < num_blocks ||
+		!free_list->first_node) {
+		if (free_list->num_free_blocks >= num_blocks) {
+			temp = rb_first(&free_list->block_free_tree);
+			first = container_of(temp, struct opensimfs_range_node, node);
+			free_list->first_node = first;
+		}
+		else {
+			spin_unlock(&free_list->s_lock);
+			return -ENOSPC;
+		}
+	}
+
+	ret_blocks = opensimfs_alloc_blocks_in_free_list(
+		sb, free_list, num_blocks, &new_blocknr);
+
+	free_list->alloc_data_count++;
+	free_list->alloc_data_pages += ret_blocks;
+
+	spin_unlock(&free_list->s_lock);
+
+	if (ret_blocks <= 0 || new_blocknr == 0)
+		return -ENOSPC;
+
+	if (zero) {
+		bp = opensimfs_get_block(
+			sb,
+			opensimfs_get_block_offset(sb, new_blocknr));
+		memset_nt(bp, 0, PAGE_SIZE * ret_blocks);
+	}
+	*blocknr = new_blocknr;
+
+	return ret_blocks / 1;
+}
+
+int opensimfs_allocate_inode_pages(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	unsigned long num_pages,
+	u64 *new_block)
+{
+	unsigned long new_inode_blocknr;
+	int allocated;
+	int ret_pages = 0;
+
+	allocated = opensimfs_new_blocks(sb, &new_inode_blocknr,
+		num_pages, 0);
+
+	if (allocated <= 0)
+		return allocated;
+
+	ret_pages += allocated;
+	num_pages -= allocated;
+
+	while (num_pages) {
+		allocated = opensimfs_new_blocks(sb,
+			&new_inode_blocknr, num_pages, 0);
+
+		if (allocated <= 0) {
+			break;
+		}
+
+		ret_pages += allocated;
+		num_pages -= allocated;
+	}
+
+	*new_block = opensimfs_get_block_offset(sb,
+		new_inode_blocknr);
+
+	return ret_pages;
+}

@@ -2,6 +2,7 @@
 #define ___OPENSIMFS_H___
 
 #include <linux/radix-tree.h>
+#include <linux/rbtree.h>
 
 #define OPENSIMFS_SUPER_MAGIC 0x4F53494D /* 'O' 'S' 'I' 'M' */
 
@@ -44,7 +45,7 @@
 
 struct opensimfs_inode {
 	__le16  i_reserved;
-	u8	  valid;
+	u8		valid;
 	__le32  i_flags;
 	__le64  i_size;		 /* size */
 	__le32  i_ctime;
@@ -100,6 +101,28 @@ struct opensimfs_super_block {
 	__le32  s_wtime;		/* write time */
 } __attribute((__packed__));
 
+struct opensimfs_free_list {
+	spinlock_t s_lock;
+	struct rb_root block_free_tree;
+	struct opensimfs_range_node *first_node;
+	unsigned long block_start;
+	unsigned long block_end;
+	unsigned long num_free_blocks;
+	unsigned long num_blocknode;
+
+	/* Statistics */
+	unsigned long alloc_log_count;
+	unsigned long alloc_data_count;
+	unsigned long free_log_count;
+	unsigned long free_Data_count;
+	unsigned long alloc_data_pages;
+	unsigned long free_data_pages;
+	unsigned long freed_log_pages;
+	unsigned long freed_data_pages;
+
+	u64 padding[8];
+};
+
 struct opensimfs_super_block_info {
 	struct super_block *sb;
 	struct block_device *s_bdev;
@@ -116,14 +139,20 @@ struct opensimfs_super_block_info {
 	unsigned long   blocksize;
 	unsigned long   initsize;
 	unsigned long   s_mount_opt;
-	kuid_t		  uid;	/* mount uid for root directory */
-	kgid_t		  gid;	/* mount gid for root directory */
-	umode_t		 mode;   /* mount mode for root directory */
+	kuid_t		  	uid;	/* mount uid for root directory */
+	kgid_t		  	gid;	/* mount gid for root directory */
+	umode_t		 	mode;   /* mount mode for root directory */
 
 	unsigned long   reserved_blocks;
 
 	struct mutex	s_lock;
+
+	struct opensimfs_free_list shared_free_list;
 };
+
+#define OPENSIMFS_DIR_PAD	8
+#define OPENSIMFS_DIR_ROUND	(OPENSIMFS_DIR_PAD - 1)
+#define OPENSIMFS_DIR_LOG_REC_LEN(name_len) (((name_len) + 29 + OPENSIMFS_DIR_ROUND) & ~OPENSIMFS_DIR_ROUND)
 
 struct opensimfs_dentry {
 	u8		entry_type;
@@ -137,6 +166,12 @@ struct opensimfs_dentry {
 	__le64	size;
 	char	name[OPENSIMFS_NAME_LEN + 1];
 } __attribute((__packed__));
+
+struct opensimfs_range_node {
+	struct rb_node node;
+	unsigned long range_low;
+	unsigned long range_high;
+};
 
 static inline struct opensimfs_super_block_info *OPENSIMFS_SB(struct super_block *sb)
 {
@@ -159,9 +194,39 @@ static inline void *opensimfs_get_block(
 	return block ? ((void *)ps + block) : NULL;
 }
 
+static inline struct opensimfs_free_list *opensimfs_get_shared_free_list(
+	struct super_block *sb)
+{
+	struct opensimfs_super_block_info *sbi = OPENSIMFS_SB(sb);
+	return &sbi->shared_free_list;
+}
+
+static inline u64 opensimfs_get_block_offset(
+	struct super_block *sb, unsigned long blocknr)
+{
+	return (u64)blocknr << PAGE_SHIFT;
+}
+
+static inline struct opensimfs_inode *opensimfs_get_inode(
+	struct super_block *sb,
+	struct inode *inode)
+{
+	struct opensimfs_inode_info *si = OPENSIMFS_I(inode);
+	struct opensimfs_inode_info_header *sih = &si->header;
+
+	return (struct opensimfs_inode *)opensimfs_get_block(sb, sih->pi_addr);
+}
+
 #define clear_mount_opt(o, opt) (o &= ~opt)
 #define set_mount_opt(o, opt)   (o |= opt)
 #define test_mount_opt(sb, opt) (OPENSIMFS_SB(sb)->s_mount_opt & opt)
+
+/* super.c */
+struct opensimfs_range_node *opensimfs_alloc_block_node(
+	struct super_block *sb);
+void opensimfs_free_block_node(
+	struct super_block *sb,
+	struct opensimfs_range_node *blknode);
 
 /* dir.c */
 int opensimfs_append_dir_init_entries(
@@ -189,10 +254,22 @@ int opensimfs_getattr(
 	struct vfsmount *mnt,
 	struct dentry *dentry,
 	struct kstat *stat);
+int opensimfs_allocate_inode_pages(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	unsigned long num_pages,
+	u64 *new_block);
 
 /* balloc.c */
 unsigned long opensimfs_count_free_blocks(
 	struct super_block *sb);
+void opensimfs_init_blockmap(
+	struct super_block *sb);
+unsigned long opensimfs_alloc_blocks_in_free_list(
+	struct super_block *sb,
+	struct opensimfs_free_list *free_list,
+	unsigned long num_blocks,
+	unsigned long *new_blocknr);
 
 /* namei.c */
 struct dentry *opensimfs_get_parent(

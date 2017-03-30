@@ -11,10 +11,30 @@
 int opensimfs_support_clwb;
 int opensimfs_support_pcommit;
 static struct kmem_cache *opensimfs_inode_cachep;
+static struct kmem_cache *opensimfs_range_node_cachep;
 
 static void init_once(void *foo);
 
-static int __init init_inodecache(void)
+static int __init init_range_node_cache(void)
+{
+	opensimfs_range_node_cachep = kmem_cache_create(
+		"opensimfs_range_node_cache",
+		sizeof(struct opensimfs_range_node),
+		0,
+		(SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD),
+		NULL);
+
+	if (opensimfs_range_node_cachep == NULL)
+		return -ENOMEM;
+	return 0;
+}
+
+static void destroy_range_node_cache(void)
+{
+	kmem_cache_destroy(opensimfs_range_node_cachep);
+}
+
+static int __init init_inode_cache(void)
 {
 	opensimfs_inode_cachep = kmem_cache_create(
 		"opensimfs_inode_cache",
@@ -29,7 +49,7 @@ static int __init init_inodecache(void)
 	return 0;
 }
 
-static void destroy_inodecache(void)
+static void destroy_inode_cache(void)
 {
 	/*
 	 * Make sure all delayed rcu free inodes are flushed before
@@ -145,6 +165,8 @@ static struct opensimfs_inode *opensimfs_init(
 	super->s_blocksize = cpu_to_le32(blocksize);
 	super->s_size = cpu_to_le64(size);
 	super->s_magic = cpu_to_le32(OPENSIMFS_SUPER_MAGIC);
+
+	opensimfs_init_blockmap(sb);
 	
 	opensimfs_flush_buffer(super, OPENSIMFS_SB_SIZE, false);
 	opensimfs_flush_buffer(
@@ -184,6 +206,48 @@ static loff_t opensimfs_max_file_size(int bits)
 		res = MAX_LFS_FILESIZE;
 
 	return res;
+}
+
+static inline
+struct opensimfs_range_node *opensimfs_alloc_range_node(
+	struct super_block *sb)
+{
+	struct opensimfs_range_node *p;
+	p = (struct opensimfs_range_node *)
+		kmem_cache_alloc(opensimfs_range_node_cachep, GFP_NOFS);
+	return p;
+}
+
+static inline
+void opensimfs_free_range_node(
+	struct opensimfs_range_node *node)
+{
+	kmem_cache_free(opensimfs_range_node_cachep, node);
+}
+
+inline struct opensimfs_range_node *opensimfs_alloc_block_node(
+	struct super_block *sb)
+{
+	return opensimfs_alloc_range_node(sb);
+}
+
+inline void opensimfs_free_block_node(
+	struct super_block *sb,
+	struct opensimfs_range_node *node)
+{
+	opensimfs_free_range_node(node);
+}
+
+inline struct opensimfs_range_node *opensimfs_alloc_inode_node(
+	struct super_block *sb)
+{
+	return opensimfs_alloc_range_node(sb);
+}
+
+inline void opensimfs_free_inode_node(
+	struct opensimfs_range_node *node)
+{
+	opensimfs_free_range_node(node);
 }
 
 static struct inode *opensimfs_alloc_inode(
@@ -231,6 +295,8 @@ int opensimfs_statfs(
 {
 	struct super_block *sb = d->d_sb;
 	struct opensimfs_super_block_info *sbi = OPENSIMFS_SB(sb);
+
+	buf->f_type = OPENSIMFS_SUPER_MAGIC;
 
 	buf->f_type = OPENSIMFS_SUPER_MAGIC;
 	buf->f_bsize = sb->s_blocksize;
@@ -424,28 +490,35 @@ static int __init init_opensimfs(void)
 	if (arch_has_clwb())
 		opensimfs_support_clwb = 1;
 
-	rc = init_inodecache();
+	rc = init_range_node_cache();
 	if (rc)
 		return rc;
 
+	rc = init_inode_cache();
+	if (rc)
+		goto out1;
+
 	rc = register_filesystem(&opensimfs_type);
 	if (rc)
-		goto out;
+		goto out2;
 
 	return 0;
 
-out:
-	destroy_inodecache();
+out2:
+	destroy_inode_cache();
+out1:
+	destroy_range_node_cache();
 	return rc;
 }
 
 static void __exit exit_opensimfs(void)
 {
 	unregister_filesystem(&opensimfs_type);
-	destroy_inodecache();
+	destroy_inode_cache();
+	destroy_range_node_cache();
 }
 
-MODULE_AUTHOR("Clay Chang <d04922024@ntu.edu.tw>");
+MODULE_AUTHOR("Clay Chang <clay.chang@gmail.com>");
 MODULE_DESCRIPTION("OpenSIMFS: An Open Source version of SIMFS");
 MODULE_LICENSE("GPL");
 
