@@ -12,7 +12,7 @@ extern struct file_operations opensimfs_dir_operations;
 extern const struct inode_operations opensimfs_symlink_inode_operations;
 extern struct inode_operations opensimfs_special_inode_operations;
 
-static int opensimfs_get_inode_address(
+int opensimfs_get_inode_address(
 	struct super_block *sb,
 	u64 ino,
 	u64 *pi_addr,
@@ -206,7 +206,7 @@ int opensimfs_getattr(
 	return 0;
 }
 
-static int opensimfs_new_blocks(
+int opensimfs_new_blocks(
 	struct super_block *sb,
 	unsigned long *blocknr,
 	unsigned int num,
@@ -260,41 +260,4 @@ static int opensimfs_new_blocks(
 	*blocknr = new_blocknr;
 
 	return ret_blocks / 1;
-}
-
-int opensimfs_allocate_inode_pages(
-	struct super_block *sb,
-	struct opensimfs_inode *pi,
-	unsigned long num_pages,
-	u64 *new_block)
-{
-	unsigned long new_inode_blocknr;
-	int allocated;
-	int ret_pages = 0;
-
-	allocated = opensimfs_new_blocks(sb, &new_inode_blocknr,
-		num_pages, 0);
-
-	if (allocated <= 0)
-		return allocated;
-
-	ret_pages += allocated;
-	num_pages -= allocated;
-
-	while (num_pages) {
-		allocated = opensimfs_new_blocks(sb,
-			&new_inode_blocknr, num_pages, 0);
-
-		if (allocated <= 0) {
-			break;
-		}
-
-		ret_pages += allocated;
-		num_pages -= allocated;
-	}
-
-	*new_block = opensimfs_get_block_offset(sb,
-		new_inode_blocknr);
-
-	return ret_pages;
 }

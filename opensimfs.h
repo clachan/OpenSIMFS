@@ -78,6 +78,11 @@ struct opensimfs_inode_info_header {
 	unsigned long mmap_pages;
 	u64 last_setattr;
 	u64	last_link_change;
+
+	unsigned long pte_block;
+	unsigned long data_block;
+	unsigned long pfw_pte_block;
+	unsigned long pfw_data_block;
 };
 
 struct opensimfs_inode_info {
@@ -173,6 +178,19 @@ struct opensimfs_range_node {
 	unsigned long range_high;
 };
 
+// BKDR String Hash Function
+static inline unsigned long BKDRHash(const char *str, int length)
+{
+	unsigned int seed = 131; // 31 131 1313 13131 131313 etc..
+	unsigned long hash = 0;
+	int i;
+
+	for (i = 0; i < length; i++) {
+		hash = hash * seed + (*str++);
+	}
+	return hash;
+}
+
 static inline struct opensimfs_super_block_info *OPENSIMFS_SB(struct super_block *sb)
 {
 	return sb->s_fs_info;
@@ -231,11 +249,16 @@ void opensimfs_free_block_node(
 /* dir.c */
 int opensimfs_append_dir_init_entries(
 	struct super_block *sb,
-	struct opensimfs_inode *pi,
+	struct inode *inodepi,
 	u64 self_ino,
 	u64 parent_ino);
 
 /* inode.c */
+int opensimfs_get_inode_address(
+	struct super_block *sb,
+	u64 ino,
+	u64 *pi_addr,
+	int extendable);
 struct inode *opensimfs_iget(
 	struct super_block *sb,
 	unsigned long ino);
@@ -254,11 +277,11 @@ int opensimfs_getattr(
 	struct vfsmount *mnt,
 	struct dentry *dentry,
 	struct kstat *stat);
-int opensimfs_allocate_inode_pages(
+int opensimfs_new_blocks(
 	struct super_block *sb,
-	struct opensimfs_inode *pi,
-	unsigned long num_pages,
-	u64 *new_block);
+	unsigned long *blocknr,
+	unsigned int num,
+	int zero);
 
 /* balloc.c */
 unsigned long opensimfs_count_free_blocks(

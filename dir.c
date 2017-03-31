@@ -1,6 +1,9 @@
 #include <linux/fs.h>
 #include "opensimfs.h"
 
+#define DT2IF(dt) (((dt) << 12) & S_IFMT)
+#define IF2DT(sif) (((sif) & S_IFMT) >> 12)
+
 static int opensimfs_readdir(
 	struct file *file,
 	struct dir_context *ctx)
@@ -10,11 +13,45 @@ static int opensimfs_readdir(
 	struct opensimfs_inode *pidir;
 	struct opensimfs_inode_info *si = OPENSIMFS_I(inode);
 	struct opensimfs_inode_info_header *sih = &si->header;
-	struct opensimfs_inode *child_pi;
-	struct opensimfs_inode *prev_child_pi = NULL;
+	struct opensimfs_dentry *entry;
+	u64 pi_addr;
+	struct opensimfs_inode *pi;
+	unsigned long pos;
+	u64 curr_p;
+	unsigned short de_len;
+	unsigned long ino;
 
 	pidir = opensimfs_get_inode(sb, inode);
 
+	pos = ctx->pos;
+	if (pos == ULONG_MAX)
+		goto out;
+
+	curr_p = opensimfs_get_block_offset(sb, sih->data_block);
+	while (true) {
+		entry = (struct opensimfs_dentry *)opensimfs_get_block(sb, curr_p);
+		if (entry->entry_type == 0)
+				break;
+
+		de_len = le16_to_cpu(entry->de_len);
+		if (entry->ino > 0 && entry->invalid == 0) {
+			ino = __le64_to_cpu(entry->ino);
+			pos = BKDRHash(entry->name, entry->name_len);
+		
+			opensimfs_get_inode_address(sb, ino, &pi_addr, 0);	
+			pi = opensimfs_get_block(sb, pi_addr);
+
+			if (!dir_emit(ctx, entry->name, entry->name_len,
+				ino, IF2DT(le16_to_cpu(pi->i_mode))))
+				return 0;
+		}
+		ctx->pos = pos;
+		curr_p += de_len;
+	}
+
+	ctx->pos = ULONG_MAX;
+
+out:
 	return 0;
 }
 
@@ -33,20 +70,25 @@ struct file_operations opensimfs_dir_operations = {
 
 int opensimfs_append_dir_init_entries(
 	struct super_block *sb,
-	struct opensimfs_inode *pi,
+	struct inode *inode,
 	u64 self_ino,
 	u64 parent_ino)
 {
-	int allocated;
 	u64 new_block;
 	struct opensimfs_dentry *de_entry;
+	struct opensimfs_inode_info *si;
+	struct opensimfs_inode_info_header *sih;
 
-	allocated = opensimfs_allocate_inode_pages(sb, pi, 1, &new_block);
+	/*allocated = opensimfs_allocate_inode_pages(sb, pi, 1, &new_block);
 	if (allocated != 1) {
 		return -ENOMEM;
-	}
+	}*/
 
-	pi->i_blocks = 1;
+	si = OPENSIMFS_I(inode);
+	sih = &si->header;
+	new_block = opensimfs_get_block_offset(sb, sih->data_block);
+
+	inode->i_blocks = 1;
 
 	de_entry = (struct opensimfs_dentry*)opensimfs_get_block(sb, new_block);
 	de_entry->entry_type = 2;

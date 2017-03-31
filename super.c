@@ -188,9 +188,6 @@ static struct opensimfs_inode *opensimfs_init(
 	root_i->valid = 1;
 	opensimfs_flush_buffer(root_i, sizeof(*root_i), false);
 
-	opensimfs_append_dir_init_entries(
-		sb, root_i, OPENSIMFS_ROOT_INO, OPENSIMFS_ROOT_INO);
-
 	PERSISTENT_MARK();
 	PERSISTENT_BARRIER();
 
@@ -386,6 +383,8 @@ static int opensimfs_fill_super(
 	struct opensimfs_inode *root_pi;
 	struct opensimfs_super_block_info *sbi = NULL;
 	struct inode *root_i;
+	unsigned long pte_block;
+	unsigned long data_block;
 
 	sbi = kzalloc(sizeof(struct opensimfs_super_block_info), GFP_KERNEL);
 	if (!sbi)
@@ -437,6 +436,15 @@ setup_sb:
 		retval = PTR_ERR(root_i);
 		goto out;
 	}
+
+	opensimfs_new_blocks(sb, &pte_block, 1, 1);
+	opensimfs_new_blocks(sb, &data_block, 1, 1);
+
+	OPENSIMFS_I(root_i)->header.pte_block = pte_block;
+	OPENSIMFS_I(root_i)->header.data_block = data_block;
+
+	opensimfs_append_dir_init_entries(
+		sb, root_i, OPENSIMFS_ROOT_INO, OPENSIMFS_ROOT_INO);
 
 	sb->s_root = d_make_root(root_i);
 	if (!sb->s_root) {
