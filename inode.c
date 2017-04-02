@@ -12,6 +12,66 @@ extern struct file_operations opensimfs_dir_operations;
 extern const struct inode_operations opensimfs_symlink_inode_operations;
 extern struct inode_operations opensimfs_special_inode_operations;
 
+int opensimfs_init_inode_inuse_list(
+	struct super_block *sb)
+{
+	struct opensimfs_super_block_info *sbi = OPENSIMFS_SB(sb);
+	struct opensimfs_range_node *range_node;
+	struct opensimfs_inode_map *inode_map;
+	unsigned long range_high;
+	int ret;
+
+	sbi->s_inodes_used = OPENSIMFS_NORMAL_INODE_START;
+	range_high = OPENSIMFS_NORMAL_INODE_START - 1;
+
+	inode_map = &sbi->inode_map;
+	range_node = opensimfs_alloc_inode_node(sb);
+	if (range_node == NULL)
+		return -ENOMEM; /* FIXME: error handling */
+
+	range_node->range_low = 0;
+	range_node->range_high = range_high;
+	ret = opensimfs_insert_inode_tree(sbi, range_node);
+	if (ret) {
+		opensimfs_free_inode_node(sb, range_node);
+	}
+	inode_map->num_range_node_inode = 1;
+	inode_map->first_inode_range = range_node;
+
+	return 0;
+}
+
+int opensimfs_init_inode_table(
+	struct super_block *sb)
+{
+	struct opensimfs_inode *pi = opensimfs_get_special_inode(sb, OPENSIMFS_INODETABLE_INO);
+	struct opensimfs_inode_table *inode_table;
+	unsigned long blocknr;
+	int allocated;
+
+	pi->i_mode = 0;
+	pi->i_uid = 0;
+	pi->i_gid = 0;
+	pi->i_links_count = cpu_to_le16(1);
+	pi->i_flags = 0;
+	pi->opensimfs_ino = OPENSIMFS_INODETABLE_INO;
+	opensimfs_flush_buffer(pi, sizeof(*pi), 0);
+
+	inode_table = (struct opensimfs_inode_table *)opensimfs_get_block(sb, OPENSIMFS_DEF_BLOCK_SIZE_4K * 2);
+	if (!inode_table)
+		return -EINVAL;
+
+	allocated = opensimfs_new_blocks(sb, &blocknr, 1, 1);
+	if (allocated != 1 || blocknr == 0)
+		return -ENOSPC;
+
+	inode_table->inode_block = blocknr;
+	opensimfs_flush_buffer(inode_table, CACHELINE_SIZE, 0);
+
+	PERSISTENT_BARRIER();
+	return 0;
+}
+
 int opensimfs_get_inode_address(
 	struct super_block *sb,
 	u64 ino,
@@ -159,6 +219,7 @@ struct inode *opensimfs_iget(
 
 	opensimfs_init_header(sb, sih, __le16_to_cpu(pi->i_mode));
 	sih->ino = ino;
+	sih->pi_addr = pi_addr;
 
 	err = opensimfs_read_inode(sb, inode, pi_addr);
 	if (unlikely(err))

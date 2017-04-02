@@ -9,43 +9,43 @@
 /*
  * mount options
  */
-#define OPENSIMFS_MOUNT_PROTECT		 0x000001	/* wprotect CR0.WP */
-#define OPENSIMFS_MOUNT_XATTR_USER	  0x000002	/* Extended user attributes */
-#define OPENSIMFS_MOUNT_POSIX_ACL	   0x000004	/* POSIX Access Control Lists */
-#define OPENSIMFS_MOUNT_DAX			 0x000008	/* Direct Access */
-#define OPENSIMFS_MOUNT_ERRORS_CONT	 0x000010	/* Continue on errors */
-#define OPENSIMFS_MOUNT_ERRORS_RO	   0x000020	/* Remount fs ro on errors */
-#define OPENSIMFS_MOUNT_ERRORS_PANIC	0x000040	/* Panic on errors */
-#define OPENSIMFS_MOUNT_HUGEMMAP		0x000080	/* Huge mappings with mmap */
-#define OPENSIMFS_MOUNT_HUGEIOREMAP	 0x000100	/* Huge mappings with ioremap */
-#define OPENSIMFS_MOUNT_FORMAT		  0x000200	/* was FS formatted on mount? */
-#define OPENSIMFS_MOUNT_MOUNTING		0x000400	/* FS currently being mounted */
+#define OPENSIMFS_MOUNT_PROTECT      0x000001	/* wprotect CR0.WP */
+#define OPENSIMFS_MOUNT_XATTR_USER   0x000002	/* Extended user attributes */
+#define OPENSIMFS_MOUNT_POSIX_ACL    0x000004	/* POSIX Access Control Lists */
+#define OPENSIMFS_MOUNT_DAX          0x000008	/* Direct Access */
+#define OPENSIMFS_MOUNT_ERRORS_CONT  0x000010	/* Continue on errors */
+#define OPENSIMFS_MOUNT_ERRORS_RO    0x000020	/* Remount fs ro on errors */
+#define OPENSIMFS_MOUNT_ERRORS_PANIC 0x000040	/* Panic on errors */
+#define OPENSIMFS_MOUNT_HUGEMMAP     0x000080	/* Huge mappings with mmap */
+#define OPENSIMFS_MOUNT_HUGEIOREMAP  0x000100	/* Huge mappings with ioremap */
+#define OPENSIMFS_MOUNT_FORMAT       0x000200	/* was FS formatted on mount? */
+#define OPENSIMFS_MOUNT_MOUNTING     0x000400	/* FS currently being mounted */
 
-#define OPENSIMFS_DEF_BLOCK_SIZE_4K	 4096
-#define OPENSIMFS_SB_SIZE			   512
-#define OPENSIMFS_RESERVED_BLOCKS	   3
+#define OPENSIMFS_DEF_BLOCK_SIZE_4K  4096
+#define OPENSIMFS_SB_SIZE            512
+#define OPENSIMFS_RESERVED_BLOCKS    3
 
 /* The root inode follows immediately after the redundant super block */
-#define OPENSIMFS_ROOT_INO		  (1)
-#define OPENSIMFS_INODETABLE_INO	(2) /* Temporaty inode table */
-#define OPENSIMFS_BLOCKNODE_INO	 (3)
-#define OPENSIMFS_INODELIST_INO	 (4)
-#define OPENSIMFS_LITEJOURNAL_INO   (5)
-#define OPENSIMFS_INODELIST1_INO	(6)
+#define OPENSIMFS_ROOT_INO           1
+#define OPENSIMFS_INODETABLE_INO     2 /* Temporaty inode table */
+#define OPENSIMFS_BLOCKNODE_INO      3
+#define OPENSIMFS_INODELIST_INO      4
+#define OPENSIMFS_LITEJOURNAL_INO    5
+#define OPENSIMFS_INODELIST1_INO     6
 
-#define OPENSIMFS_ROOT_INODE_START  (OPENSIMFS_SB_SIZE * 2)
+#define OPENSIMFS_ROOT_INODE_START   (OPENSIMFS_SB_SIZE * 2)
 
 /* Normal inode starts at 16 */
 #define OPENSIMFS_NORMAL_INODE_START (16)
 
-#define OPENSIMFS_INODE_SIZE		128
-#define OPENSIMFS_INODE_BITS		7
+#define OPENSIMFS_INODE_SIZE         128
+#define OPENSIMFS_INODE_BITS         7
 
-#define OPENSIMFS_NAME_LEN			255
+#define OPENSIMFS_NAME_LEN           255
 
 struct opensimfs_inode {
 	__le16  i_reserved;
-	u8		valid;
+	u8	valid;
 	__le32  i_flags;
 	__le64  i_size;		 /* size */
 	__le32  i_ctime;
@@ -90,21 +90,14 @@ struct opensimfs_inode_info {
 	struct inode vfs_inode;
 };
 
+struct opensimfs_inode_table {
+	__le64 inode_block;
+};
+
 static inline struct opensimfs_inode_info *OPENSIMFS_I(struct inode *inode)
 {
 	return container_of(inode, struct opensimfs_inode_info, vfs_inode);
 }
-
-struct opensimfs_super_block {
-	__le16  s_checksum;	 /* checksum of this sb */
-	__le16  s_padding;
-	__le32  s_magic;		/* magic signature */
-	__le32  s_blocksize;	/* super block size in bytes */
-	__le64  s_size;		 /* file system size in bytes */
-	
-	__le32  s_mtime;		/* mount time */
-	__le32  s_wtime;		/* write time */
-} __attribute((__packed__));
 
 struct opensimfs_free_list {
 	spinlock_t s_lock;
@@ -128,6 +121,26 @@ struct opensimfs_free_list {
 	u64 padding[8];
 };
 
+struct opensimfs_super_block {
+	__le16  s_checksum;	 /* checksum of this sb */
+	__le16  s_padding;
+	__le32  s_magic;		/* magic signature */
+	__le32  s_blocksize;	/* super block size in bytes */
+	__le64  s_size;		 /* file system size in bytes */
+
+	__le32  s_mtime;		/* mount time */
+	__le32  s_wtime;		/* write time */
+} __attribute((__packed__));
+
+struct opensimfs_inode_map {
+	struct mutex inode_table_mutex;
+	struct rb_root inode_inuse_tree;
+	unsigned long num_range_node_inode;
+	struct opensimfs_range_node *first_inode_range;
+	int allocated;
+	int freed;
+};
+
 struct opensimfs_super_block_info {
 	struct super_block *sb;
 	struct block_device *s_bdev;
@@ -148,11 +161,13 @@ struct opensimfs_super_block_info {
 	kgid_t		  	gid;	/* mount gid for root directory */
 	umode_t		 	mode;   /* mount mode for root directory */
 
+	unsigned long	s_inodes_used;
 	unsigned long   reserved_blocks;
 
 	struct mutex	s_lock;
 
 	struct opensimfs_free_list shared_free_list;
+	struct opensimfs_inode_map inode_map;
 };
 
 #define OPENSIMFS_DIR_PAD	8
@@ -240,9 +255,20 @@ static inline struct opensimfs_inode *opensimfs_get_inode(
 #define test_mount_opt(sb, opt) (OPENSIMFS_SB(sb)->s_mount_opt & opt)
 
 /* super.c */
+struct opensimfs_inode *opensimfs_get_basic_inode(
+	struct super_block *sb,
+	u64 ino);
+struct opensimfs_inode *opensimfs_get_special_inode(
+	struct super_block *sb,
+	u64 ino);
 struct opensimfs_range_node *opensimfs_alloc_block_node(
 	struct super_block *sb);
 void opensimfs_free_block_node(
+	struct super_block *sb,
+	struct opensimfs_range_node *blknode);
+struct opensimfs_range_node *opensimfs_alloc_inode_node(
+	struct super_block *sb);
+void opensimfs_free_inode_node(
 	struct super_block *sb,
 	struct opensimfs_range_node *blknode);
 
@@ -254,6 +280,10 @@ int opensimfs_append_dir_init_entries(
 	u64 parent_ino);
 
 /* inode.c */
+int opensimfs_init_inode_inuse_list(
+	struct super_block *sb);
+int opensimfs_init_inode_table(
+	struct super_block *sb);
 int opensimfs_get_inode_address(
 	struct super_block *sb,
 	u64 ino,
@@ -286,6 +316,9 @@ int opensimfs_new_blocks(
 /* balloc.c */
 unsigned long opensimfs_count_free_blocks(
 	struct super_block *sb);
+int opensimfs_insert_inode_tree(
+	struct opensimfs_super_block_info *sbi,
+	struct opensimfs_range_node *new_node);
 void opensimfs_init_blockmap(
 	struct super_block *sb);
 unsigned long opensimfs_alloc_blocks_in_free_list(

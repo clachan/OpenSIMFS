@@ -113,7 +113,7 @@ void opensimfs_sysfs_exit(
 {
 }
 
-static inline struct opensimfs_inode *opensimfs_get_basic_inode(
+inline struct opensimfs_inode *opensimfs_get_basic_inode(
 	struct super_block *sb,
 	u64 ino)
 {
@@ -125,7 +125,7 @@ static inline struct opensimfs_inode *opensimfs_get_basic_inode(
 		 (ino - OPENSIMFS_ROOT_INO) * OPENSIMFS_INODE_SIZE);
 }
 
-static inline struct opensimfs_inode *opensimfs_get_special_inode(
+inline struct opensimfs_inode *opensimfs_get_special_inode(
 	struct super_block *sb,
 	u64 ino)
 {
@@ -167,6 +167,8 @@ static struct opensimfs_inode *opensimfs_init(
 	super->s_magic = cpu_to_le32(OPENSIMFS_SUPER_MAGIC);
 
 	opensimfs_init_blockmap(sb);
+	opensimfs_init_inode_inuse_list(sb);
+	opensimfs_init_inode_table(sb);
 	
 	opensimfs_flush_buffer(super, OPENSIMFS_SB_SIZE, false);
 	opensimfs_flush_buffer(
@@ -242,6 +244,7 @@ inline struct opensimfs_range_node *opensimfs_alloc_inode_node(
 }
 
 inline void opensimfs_free_inode_node(
+	struct super_block *sb,
 	struct opensimfs_range_node *node)
 {
 	opensimfs_free_range_node(node);
@@ -381,6 +384,8 @@ static int opensimfs_fill_super(
 
 	struct opensimfs_super_block *super;
 	struct opensimfs_inode *root_pi;
+	struct opensimfs_inode_info *si;
+	struct opensimfs_inode_info_header *sih;
 	struct opensimfs_super_block_info *sbi = NULL;
 	struct inode *root_i;
 	unsigned long pte_block;
@@ -437,11 +442,14 @@ setup_sb:
 		goto out;
 	}
 
+	si = OPENSIMFS_I(root_i);
+	sih = &si->header;
+
 	opensimfs_new_blocks(sb, &pte_block, 1, 1);
 	opensimfs_new_blocks(sb, &data_block, 1, 1);
 
-	OPENSIMFS_I(root_i)->header.pte_block = pte_block;
-	OPENSIMFS_I(root_i)->header.data_block = data_block;
+	sih->pte_block = pte_block;
+	sih->data_block = data_block;
 
 	opensimfs_append_dir_init_entries(
 		sb, root_i, OPENSIMFS_ROOT_INO, OPENSIMFS_ROOT_INO);

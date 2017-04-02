@@ -69,6 +69,21 @@ inline int opensimfs_insert_block_tree(
 	return ret;
 }
 
+inline int opensimfs_insert_inode_tree(
+	struct opensimfs_super_block_info *sbi,
+	struct opensimfs_range_node *new_node)
+{
+	struct rb_root *tree;
+	int ret;
+
+	tree = &sbi->inode_map.inode_inuse_tree;
+	ret = opensimfs_insert_range_node(sbi, tree, new_node);
+	if (ret)
+		; /* FIXME: error handling */
+
+	return ret;
+}
+
 void opensimfs_init_blockmap(
 	struct super_block *sb)
 {
