@@ -38,6 +38,7 @@ static int opensimfs_readdir(
 			ino = __le64_to_cpu(entry->ino);
 			pos = BKDRHash(entry->name, entry->name_len);
 		
+			/* FIXME: how about special inode? e.g. ., .. */
 			opensimfs_get_inode_address(sb, ino, &pi_addr, 0);	
 			pi = opensimfs_get_block(sb, pi_addr);
 
@@ -111,6 +112,28 @@ int opensimfs_append_dir_init_entries(
 	de_entry->links_count = 1;
 	strncpy(de_entry->name, "..\0", 3);
 	opensimfs_flush_buffer(de_entry, OPENSIMFS_DIR_LOG_REC_LEN(2), 0);
+
+	return 0;
+}
+
+int opensimfs_add_dentry(
+	struct dentry *dentry,
+	u64 ino,
+	int inc_link)
+{
+	/*
+	struct inode *dir = dentry->d_parent->d_inode;
+	struct super_block *sb = dir->i_sb;
+	struct opensimfs_inode_info *si = OPENSIMFS_I(dir);
+	struct opensimfs_inode_info_header *sih = &si->header;
+	struct opensimfs_inode *pidir;
+	const char *name = dentry->d_name.name;
+	int namelen = dentry->d_name.len;
+
+	pidir = opensimfs_get_inode(sb, dir);
+	
+	dir->i_mtime = dir->i_ctime = CURRENT_TIME_SEC;
+	*/
 
 	return 0;
 }

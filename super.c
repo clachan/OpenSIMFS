@@ -6,6 +6,7 @@
 #include <linux/slab.h>
 #include <linux/pfn_t.h>
 #include <linux/blkdev.h>
+#include <linux/random.h>
 #include "opensimfs.h"
 
 int opensimfs_support_clwb;
@@ -390,6 +391,7 @@ static int opensimfs_fill_super(
 	struct inode *root_i;
 	unsigned long pte_block;
 	unsigned long data_block;
+	u32 random = 0;
 
 	sbi = kzalloc(sizeof(struct opensimfs_super_block_info), GFP_KERNEL);
 	if (!sbi)
@@ -401,6 +403,9 @@ static int opensimfs_fill_super(
 
 	if (opensimfs_get_sb_info(sb, sbi))
 		goto out;
+
+	get_random_bytes(&random, sizeof(u32));
+	atomic_set(&sbi->next_generation, random);
 
 	/* initialize with default values */
 	sbi->mode = (S_IRUGO | S_IXUGO | S_IWUGO);

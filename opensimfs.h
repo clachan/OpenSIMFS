@@ -150,7 +150,7 @@ struct opensimfs_super_block_info {
 	 * is also the pointer to the super block.
 	 */
 	phys_addr_t	 phys_addr;
-	void			*virt_addr;
+	void             *virt_addr;
 	
 	/* mount options */
 	unsigned long   num_blocks;
@@ -160,8 +160,9 @@ struct opensimfs_super_block_info {
 	kuid_t		  	uid;	/* mount uid for root directory */
 	kgid_t		  	gid;	/* mount gid for root directory */
 	umode_t		 	mode;   /* mount mode for root directory */
+	atomic_t		next_generation;
 
-	unsigned long	s_inodes_used;
+	unsigned long	s_inodes_used_count;
 	unsigned long   reserved_blocks;
 
 	struct mutex	s_lock;
@@ -250,6 +251,13 @@ static inline struct opensimfs_inode *opensimfs_get_inode(
 	return (struct opensimfs_inode *)opensimfs_get_block(sb, sih->pi_addr);
 }
 
+static inline struct opensimfs_inode_table *opensimfs_get_inode_table(
+	struct super_block *sb)
+{
+	return (struct opensimfs_inode_table *)((char *)opensimfs_get_block(sb,
+		OPENSIMFS_DEF_BLOCK_SIZE_4K * 2));
+}
+
 #define clear_mount_opt(o, opt) (o &= ~opt)
 #define set_mount_opt(o, opt)   (o |= opt)
 #define test_mount_opt(sb, opt) (OPENSIMFS_SB(sb)->s_mount_opt & opt)
@@ -278,6 +286,10 @@ int opensimfs_append_dir_init_entries(
 	struct inode *inodepi,
 	u64 self_ino,
 	u64 parent_ino);
+int opensimfs_add_dentry(
+	struct dentry *dentry,
+	u64 ino,
+	int inc_link);
 
 /* inode.c */
 int opensimfs_init_inode_inuse_list(
@@ -312,6 +324,25 @@ int opensimfs_new_blocks(
 	unsigned long *blocknr,
 	unsigned int num,
 	int zero);
+u64 opensimfs_new_opensimfs_inode(
+	struct super_block *sb,
+	u64 *pi_addr);
+
+enum opensimfs_new_inode_type {
+	TYPE_CREATE = 0,
+	TYPE_MKNOD,
+	TYPE_SYMLINK,
+	TYPE_MKDIR
+};
+struct inode *opensimfs_new_vfs_inode(
+	enum opensimfs_new_inode_type type,
+	struct inode *dir,
+	u64 pi_addr,
+	u64 ino,
+	umode_t mode,
+	size_t size,
+	dev_t rdev,
+	const struct qstr *qstr);
 
 /* balloc.c */
 unsigned long opensimfs_count_free_blocks(
@@ -330,6 +361,29 @@ unsigned long opensimfs_alloc_blocks_in_free_list(
 /* namei.c */
 struct dentry *opensimfs_get_parent(
 	struct dentry *child);
+
+/* Flags that should be inherited by new inodes from their parent. */
+#define OPENSIMFS_FL_INHERITED \
+	(FS_SECRM_FL | FS_UNRM_FL | FS_COMPR_FL | \
+	 FS_SYNC_FL | FS_NODUMP_FL | FS_NOATIME_FL |	\
+	 FS_COMPRBLK_FL | FS_NOCOMP_FL | FS_JOURNAL_DATA_FL | \
+	 FS_NOTAIL_FL | FS_DIRSYNC_FL)
+/* Flags that are appropriate for regular files (all but dir-specific ones). */
+#define OPENSIMFS_REG_FLMASK (~(FS_DIRSYNC_FL | FS_TOPDIR_FL))
+/* Flags that are appropriate for non-directories/regular files. */
+#define OPENSIMFS_OTHER_FLMASK (FS_NODUMP_FL | FS_NOATIME_FL)
+#define OPENSIMFS_FL_USER_VISIBLE (FS_FL_USER_VISIBLE | NOVA_EOFBLOCKS_FL)
+
+static inline __le32 opensimfs_mask_flags(umode_t mode, __le32 flags)
+{
+	flags &= cpu_to_le32(OPENSIMFS_FL_INHERITED);
+	if (S_ISDIR(mode))
+		return flags;
+	else if (S_ISREG(mode))
+		return flags & cpu_to_le32(OPENSIMFS_REG_FLMASK);
+	else
+		return flags & cpu_to_le32(OPENSIMFS_OTHER_FLMASK);
+}
 
 /* assumes the length to be 4-byte aligned */
 static inline void memset_nt(void *dest, uint32_t dword, size_t length)
