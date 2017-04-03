@@ -131,7 +131,7 @@ int opensimfs_add_dentry(
 	int namelen = dentry->d_name.len;
 
 	pidir = opensimfs_get_inode(sb, dir);
-	
+
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME_SEC;
 	*/
 
