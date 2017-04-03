@@ -30,10 +30,10 @@ static int opensimfs_readdir(
 	curr_p = opensimfs_get_block_offset(sb, sih->data_block);
 	while (true) {
 		entry = (struct opensimfs_dentry *)opensimfs_get_block(sb, curr_p);
-		if (entry->entry_type == 0)
+		de_len = le16_to_cpu(entry->de_len);
+		if (entry->de_len == 0)
 				break;
 
-		de_len = le16_to_cpu(entry->de_len);
 		if (entry->ino > 0 && entry->invalid == 0) {
 			ino = __le64_to_cpu(entry->ino);
 			pos = BKDRHash(entry->name, entry->name_len);
@@ -92,26 +92,24 @@ int opensimfs_append_dir_init_entries(
 	inode->i_blocks = 1;
 
 	de_entry = (struct opensimfs_dentry*)opensimfs_get_block(sb, new_block);
-	de_entry->entry_type = 2;
 	de_entry->ino = cpu_to_le64(self_ino);
 	de_entry->name_len = 1;
-	de_entry->de_len = cpu_to_le16(OPENSIMFS_DIR_LOG_REC_LEN(1));
+	de_entry->de_len = cpu_to_le16(OPENSIMFS_DIR_LEN(1));
 	de_entry->mtime = CURRENT_TIME_SEC.tv_sec;
 	de_entry->size = sb->s_blocksize;
 	de_entry->links_count = 1;
 	strncpy(de_entry->name, ".\0", 2);
-	opensimfs_flush_buffer(de_entry, OPENSIMFS_DIR_LOG_REC_LEN(1), 0);
+	opensimfs_flush_buffer(de_entry, OPENSIMFS_DIR_LEN(1), 0);
 
 	de_entry = (struct opensimfs_dentry*)((char *)de_entry + le16_to_cpu(de_entry->de_len));
-	de_entry->entry_type = 2;
 	de_entry->ino = cpu_to_le64(parent_ino);
 	de_entry->name_len = 2;
-	de_entry->de_len = cpu_to_le16(OPENSIMFS_DIR_LOG_REC_LEN(2));
+	de_entry->de_len = cpu_to_le16(OPENSIMFS_DIR_LEN(2));
 	de_entry->mtime = CURRENT_TIME_SEC.tv_sec;
 	de_entry->size = sb->s_blocksize;
 	de_entry->links_count = 1;
 	strncpy(de_entry->name, "..\0", 3);
-	opensimfs_flush_buffer(de_entry, OPENSIMFS_DIR_LOG_REC_LEN(2), 0);
+	opensimfs_flush_buffer(de_entry, OPENSIMFS_DIR_LEN(2), 0);
 
 	return 0;
 }
@@ -121,19 +119,36 @@ int opensimfs_add_dentry(
 	u64 ino,
 	int inc_link)
 {
-	/*
 	struct inode *dir = dentry->d_parent->d_inode;
 	struct super_block *sb = dir->i_sb;
 	struct opensimfs_inode_info *si = OPENSIMFS_I(dir);
 	struct opensimfs_inode_info_header *sih = &si->header;
 	struct opensimfs_inode *pidir;
-	const char *name = dentry->d_name.name;
-	int namelen = dentry->d_name.len;
+	struct opensimfs_dentry *new_entry;
+	u64 curr_p;
+	unsigned short de_len;
 
 	pidir = opensimfs_get_inode(sb, dir);
 
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME_SEC;
-	*/
+	curr_p = opensimfs_get_block_offset(sb, sih->data_block);
+	while (true) {
+		new_entry = (struct opensimfs_dentry *)opensimfs_get_block(sb, curr_p);
+		de_len = le16_to_cpu(new_entry->de_len);
+		if (de_len == 0) {
+			new_entry->ino = ino;
+			new_entry->name_len = dentry->d_name.len;
+			new_entry->de_len = cpu_to_le16(OPENSIMFS_DIR_LEN(dentry->d_name.len));
+			new_entry->mtime = CURRENT_TIME_SEC.tv_sec;
+			new_entry->size = sb->s_blocksize;
+			new_entry->links_count = 1;
+			strncpy(new_entry->name, dentry->d_name.name, dentry->d_name.len);
+			opensimfs_flush_buffer(new_entry, OPENSIMFS_DIR_LEN(dentry->d_name.len), 0);
+			break;
+		}
+
+		curr_p += de_len;
+	}
 
 	return 0;
 }

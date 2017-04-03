@@ -173,10 +173,9 @@ struct opensimfs_super_block_info {
 
 #define OPENSIMFS_DIR_PAD	8
 #define OPENSIMFS_DIR_ROUND	(OPENSIMFS_DIR_PAD - 1)
-#define OPENSIMFS_DIR_LOG_REC_LEN(name_len) (((name_len) + 29 + OPENSIMFS_DIR_ROUND) & ~OPENSIMFS_DIR_ROUND)
+#define OPENSIMFS_DIR_LEN(name_len) (((name_len) + 28 + OPENSIMFS_DIR_ROUND) & ~OPENSIMFS_DIR_ROUND)
 
 struct opensimfs_dentry {
-	u8		entry_type;
 	u8		name_len;
 	u8		file_type;
 	u8		invalid;
