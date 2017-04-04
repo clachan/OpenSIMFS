@@ -361,6 +361,21 @@ unsigned long opensimfs_alloc_blocks_in_free_list(
 struct dentry *opensimfs_get_parent(
 	struct dentry *child);
 
+/* dax.c */
+ssize_t opensimfs_dax_file_read(
+	struct file *filp,
+	char __user *buf,
+	size_t len,
+	loff_t *ppos);
+ssize_t opensimfs_dax_file_write(
+	struct file *filp,
+	const char __user *buf,
+	size_t len,
+	loff_t *ppos);
+int opensimfs_dax_file_mmap(
+	struct file *file,
+	struct vm_area_struct *vma);
+
 /* Flags that should be inherited by new inodes from their parent. */
 #define OPENSIMFS_FL_INHERITED \
 	(FS_SECRM_FL | FS_UNRM_FL | FS_COMPR_FL | \
