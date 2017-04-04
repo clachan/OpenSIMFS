@@ -3,6 +3,7 @@
 
 #include <linux/radix-tree.h>
 #include <linux/rbtree.h>
+#include <linux/uaccess.h>
 
 #define OPENSIMFS_SUPER_MAGIC 0x4F53494D /* 'O' 'S' 'I' 'M' */
 
@@ -508,6 +509,16 @@ static inline void opensimfs_flush_buffer(
 	 * provides implicit fence. */
 	if (fence)
 		PERSISTENT_BARRIER();
+}
+
+static inline int memcpy_to_pmem_nocache(
+	void *dst,
+	const void *src,
+	unsigned int size)
+{
+	int ret;
+
+	return __copy_from_user_inatomic_nocache(dst, src, size);
 }
 
 #endif

@@ -30,7 +30,33 @@ ssize_t opensimfs_dax_file_write(
 	size_t len,
 	loff_t *ppos)
 {
-	return len;	
+	struct address_space *mapping = filp->f_mapping;
+	struct inode *inode = mapping->host;
+	struct opensimfs_inode_info *si = OPENSIMFS_I(inode);
+	struct opensimfs_inode_info_header *sih = &si->header;
+	struct super_block *sb = inode->i_sb;
+	struct opensimfs_inode *pi;
+	char *p;
+	ssize_t written;
+	size_t ret;
+
+	pi = opensimfs_get_inode(sb, inode);
+
+	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->data_block));
+	memcpy_to_pmem_nocache(p, buf, len);
+	opensimfs_flush_buffer(p, len, 0);
+
+	written = len;
+
+	inode->i_ctime = inode->i_mtime = CURRENT_TIME_SEC;
+	pi->i_blocks = 1;
+	inode->i_blocks = le64_to_cpu(pi->i_blocks);
+	i_size_write(inode, written);
+	sih->i_size = written;
+
+	ret = written;
+
+	return ret;
 }
 
 static int opensimfs_dax_fault(
