@@ -114,6 +114,25 @@ int opensimfs_append_dir_init_entries(
 	return 0;
 }
 
+static int opensimfs_insert_dir_radix_tree(
+	struct super_block *sb,
+	struct opensimfs_inode_info_header *sih,
+	const char *name,
+	int namelen,
+	struct opensimfs_dentry *direntry)
+{
+	unsigned long hash;
+	int ret;
+
+	hash = BKDRHash(name, namelen);
+
+	ret = radix_tree_insert(&sih->tree, hash, direntry);
+	if (ret)
+		; /* FIXME error handling */
+
+	return ret;
+}
+
 int opensimfs_add_dentry(
 	struct dentry *dentry,
 	u64 ino,
@@ -144,6 +163,7 @@ int opensimfs_add_dentry(
 			new_entry->links_count = 1;
 			strncpy(new_entry->name, dentry->d_name.name, dentry->d_name.len);
 			opensimfs_flush_buffer(new_entry, OPENSIMFS_DIR_LEN(dentry->d_name.len), 0);
+			opensimfs_insert_dir_radix_tree(sb, sih, new_entry->name, new_entry->name_len, new_entry);
 			break;
 		}
 
