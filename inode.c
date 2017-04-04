@@ -316,6 +316,11 @@ int opensimfs_getattr(
 	struct dentry *dentry,
 	struct kstat *stat)
 {
+	struct inode *inode;
+
+	inode = dentry->d_inode;
+	generic_fillattr(inode, stat);
+	stat->blocks = (inode->i_blocks << inode->i_sb->s_blocksize_bits) >> 9;
 	return 0;
 }
 
@@ -522,7 +527,7 @@ struct inode *opensimfs_new_vfs_inode(
 	}
 
 	inode_init_owner(inode, dir, mode);
-	inode->i_blocks = inode->i_size = 0;
+	inode->i_blocks = 0;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	inode->i_generation = atomic_add_return(1, &sbi->next_generation);
 	inode->i_size = size;
