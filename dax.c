@@ -3,12 +3,29 @@
 #include "opensimfs.h"
 
 static ssize_t do_dax_mapping_read(
-	struct file *file,
+	struct file *filp,
 	char __user *buf,
 	size_t len,
 	loff_t *ppos)
 {
-	return 0;
+	struct address_space *mapping = filp->f_mapping;
+	struct inode *inode = mapping->host;
+	struct opensimfs_inode_info *si = OPENSIMFS_I(inode);
+	struct opensimfs_inode_info_header *sih = &si->header;
+	struct super_block *sb = inode->i_sb;
+	struct opensimfs_inode *pi;
+	char *p;
+	loff_t isize;
+
+	pi = opensimfs_get_inode(sb, inode);
+
+	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->data_block));
+
+	isize = i_size_read(inode);
+	__copy_to_user(buf, p, inode->i_size);
+
+	file_accessed(filp);
+	return inode->i_size;
 }
 
 ssize_t opensimfs_dax_file_read(
@@ -38,7 +55,6 @@ ssize_t opensimfs_dax_file_write(
 	struct opensimfs_inode *pi;
 	char *p;
 	ssize_t written;
-	size_t ret;
 
 	pi = opensimfs_get_inode(sb, inode);
 
@@ -54,9 +70,7 @@ ssize_t opensimfs_dax_file_write(
 	i_size_write(inode, written);
 	sih->i_size = written;
 
-	ret = written;
-
-	return ret;
+	return written;
 }
 
 static int opensimfs_dax_fault(

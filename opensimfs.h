@@ -516,8 +516,6 @@ static inline int memcpy_to_pmem_nocache(
 	const void *src,
 	unsigned int size)
 {
-	int ret;
-
 	return __copy_from_user_inatomic_nocache(dst, src, size);
 }
 
