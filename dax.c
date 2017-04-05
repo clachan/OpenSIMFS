@@ -23,9 +23,10 @@ static ssize_t do_dax_mapping_read(
 
 	isize = i_size_read(inode);
 	__copy_to_user(buf, p, inode->i_size);
+	*ppos += isize;
 
 	file_accessed(filp);
-	return inode->i_size;
+	return isize;
 }
 
 ssize_t opensimfs_dax_file_read(
