@@ -61,15 +61,21 @@ ssize_t opensimfs_dax_file_write(
 	unsigned long *ppte;
 	unsigned long pte;
 	ssize_t written;
+	unsigned long temp;
 
 	pi = opensimfs_get_inode(sb, inode);
 
 	ppte = (unsigned long *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->pte_block));
-	pte = sih->data_block;
+	pte = sih->pfw_data_block;
 	*ppte = pte;
 	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, *ppte));
 	memcpy_to_pmem_nocache(p, buf, len);
 	opensimfs_flush_buffer(p, len, 0);
+
+	/* rotation of data_block and pfw_data_block */
+	temp = sih->data_block;
+	sih->data_block = sih->pfw_data_block;
+	sih->pfw_data_block = temp;
 
 	written = len;
 
