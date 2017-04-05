@@ -15,13 +15,20 @@ static ssize_t do_dax_mapping_read(
 	struct super_block *sb = inode->i_sb;
 	struct opensimfs_inode *pi;
 	char *p;
+	unsigned long *ppte;
+	unsigned long pte;
 	loff_t isize;
+
+	isize = i_size_read(inode);
+	if (*ppos >= isize)
+		return 0;
 
 	pi = opensimfs_get_inode(sb, inode);
 
-	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->data_block));
+	ppte = (unsigned long *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->pte_block));
+	pte = *ppte;
+	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, pte));
 
-	isize = i_size_read(inode);
 	__copy_to_user(buf, p, inode->i_size);
 	*ppos += isize;
 
@@ -35,11 +42,7 @@ ssize_t opensimfs_dax_file_read(
 	size_t len,
 	loff_t *ppos)
 {
-	ssize_t res;
-
-	res = do_dax_mapping_read(filp, buf, len, ppos);
-
-	return res;
+	return do_dax_mapping_read(filp, buf, len, ppos);
 }
 
 ssize_t opensimfs_dax_file_write(
@@ -55,11 +58,16 @@ ssize_t opensimfs_dax_file_write(
 	struct super_block *sb = inode->i_sb;
 	struct opensimfs_inode *pi;
 	char *p;
+	unsigned long *ppte;
+	unsigned long pte;
 	ssize_t written;
 
 	pi = opensimfs_get_inode(sb, inode);
 
-	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->data_block));
+	ppte = (unsigned long *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->pte_block));
+	pte = sih->data_block;
+	*ppte = pte;
+	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, *ppte));
 	memcpy_to_pmem_nocache(p, buf, len);
 	opensimfs_flush_buffer(p, len, 0);
 
