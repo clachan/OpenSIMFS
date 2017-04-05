@@ -389,8 +389,6 @@ static int opensimfs_fill_super(
 	struct opensimfs_inode_info_header *sih;
 	struct opensimfs_super_block_info *sbi = NULL;
 	struct inode *root_i;
-	unsigned long pte_block;
-	unsigned long data_block;
 	u32 random = 0;
 
 	sbi = kzalloc(sizeof(struct opensimfs_super_block_info), GFP_KERNEL);
@@ -450,11 +448,10 @@ setup_sb:
 	si = OPENSIMFS_I(root_i);
 	sih = &si->header;
 
-	opensimfs_new_blocks(sb, &pte_block, 1, 1);
-	opensimfs_new_blocks(sb, &data_block, 1, 1);
-
-	sih->pte_block = pte_block;
-	sih->data_block = data_block;
+	opensimfs_new_blocks(sb, &sih->pte_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->data_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->pfw_pte_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->pfw_data_block, 1, 1);
 
 	opensimfs_append_dir_init_entries(
 		sb, root_i, OPENSIMFS_ROOT_INO, OPENSIMFS_ROOT_INO);

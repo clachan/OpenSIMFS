@@ -516,8 +516,6 @@ struct inode *opensimfs_new_vfs_inode(
 	struct opensimfs_inode *pi;
 	struct opensimfs_inode_info *si;
 	struct opensimfs_inode_info_header *sih;
-	unsigned long pte_block;
-	unsigned long data_block;
 	int errval;
 
 	sb = dir->i_sb;
@@ -577,11 +575,10 @@ struct inode *opensimfs_new_vfs_inode(
 	sih->pi_addr = pi_addr;
 	sih->ino = ino;
 
-	opensimfs_new_blocks(sb, &pte_block, 1, 1);
-	opensimfs_new_blocks(sb, &data_block, 1, 1);
-
-	sih->pte_block = pte_block;
-	sih->data_block = data_block;
+	opensimfs_new_blocks(sb, &sih->pte_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->data_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->pfw_pte_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->pfw_data_block, 1, 1);
 
 	opensimfs_update_inode(inode, pi);
 	opensimfs_set_inode_flags(inode, pi, le32_to_cpu(pi->i_flags));
