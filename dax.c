@@ -1,5 +1,8 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/buffer_head.h>
+#include <linux/dax.h>
+#include <linux/pfn_t.h>
 #include "opensimfs.h"
 
 static ssize_t do_dax_mapping_read(
@@ -92,9 +95,7 @@ static int opensimfs_dax_fault(
 	struct vm_area_struct *vma,
 	struct vm_fault *vmf)
 {
-	int ret = 0;
-	
-	return ret;
+	return -EINVAL;
 }
 
 static int opensimfs_dax_pmd_fault(
@@ -103,9 +104,7 @@ static int opensimfs_dax_pmd_fault(
 	pmd_t *pmd,
 	unsigned int flags)
 {
-	int ret = 0;
-
-	return ret;
+	return -EINVAL;
 }
 
 static int opensimfs_dax_pfn_mkwrite(
@@ -128,10 +127,23 @@ int opensimfs_dax_file_mmap(
 	struct file *file,
 	struct vm_area_struct *vma)
 {
+	struct inode *inode = file_inode(vma->vm_file);
+	struct super_block *sb = inode->i_sb;
+	struct opensimfs_super_block_info *sbi = OPENSIMFS_SB(sb);
+	struct opensimfs_inode_info *si = OPENSIMFS_I(inode);
+	struct opensimfs_inode_info_header *sih = &si->header;
+	unsigned long data_block;
+	pfn_t pfn;
+	int ret;
+
 	file_accessed(file);
 
 	vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
 	vma->vm_ops = &opensimfs_dax_vm_ops;
 
-	return 0;
+	data_block = sih->data_block;
+	pfn = pfn_to_pfn_t(sbi->phys_addr + data_block);
+	ret = vm_insert_mixed(vma, vma->vm_start, pfn);
+
+	return ret;
 }
