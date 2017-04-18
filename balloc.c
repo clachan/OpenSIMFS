@@ -55,6 +55,48 @@ static int opensimfs_insert_range_node(
 	return 0;
 }
 
+static int opensimfs_find_range_node(
+	struct opensimfs_super_block_info *sbi,
+	struct rb_root *tree,
+	unsigned long range_low,
+	struct opensimfs_range_node **ret_node)
+{
+	struct opensimfs_range_node *curr = NULL;
+	struct rb_node *temp;
+	int compVal;
+	int ret = 0;
+
+	temp = tree->rb_node;
+
+	while (temp) {
+		curr = container_of(temp, struct opensimfs_range_node, node);
+		compVal = opensimfs_rbtree_compare_range_node(curr, range_low);
+
+		if (compVal == -1) {
+			temp = temp->rb_left;
+		} else if (compVal == 1) {
+			temp = temp->rb_right;
+		} else {
+			ret = 1;
+			break;
+		}
+	}
+
+	*ret_node = curr;
+	return ret;
+}
+
+inline int opensimfs_search_inode_tree(
+	struct opensimfs_super_block_info *sbi,
+	unsigned long ino,
+	struct opensimfs_range_node **ret_node)
+{
+	struct rb_root *tree;
+
+	tree = &sbi->inode_map.inode_inuse_tree;
+	return opensimfs_find_range_node(sbi, tree, ino, ret_node);
+}
+
 inline int opensimfs_insert_block_tree(
 	struct opensimfs_super_block_info *sbi,
 	struct rb_root *tree,

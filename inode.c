@@ -1,5 +1,6 @@
 #include <linux/fs.h>
 #include <linux/radix-tree.h>
+#include <linux/mm.h>
 #include "opensimfs.h"
 
 struct address_space_operations opensimfs_aops_dax = {
@@ -299,9 +300,139 @@ void opensimfs_dirty_inode(
 {
 }
 
+static int opensimfs_free_inuse_inode(
+	struct super_block *sb,
+	unsigned long ino)
+{
+	struct opensimfs_super_block_info *sbi = OPENSIMFS_SB(sb);
+	struct opensimfs_inode_map *inode_map;
+	struct opensimfs_range_node *i = NULL;
+	struct opensimfs_range_node *curr_node;
+	int found = 0;
+	int ret = 0;
+
+	inode_map = &sbi->inode_map;
+
+	mutex_lock(&inode_map->inode_table_mutex);
+	found = opensimfs_search_inode_tree(sbi, ino, &i);
+	if (!found) {
+		mutex_unlock(&inode_map->inode_table_mutex);
+		return -EINVAL;
+	}
+
+	if ((ino == i->range_low) && (ino == i->range_high)) {
+		rb_erase(&i->node, &inode_map->inode_inuse_tree);
+		opensimfs_free_inode_node(sb, i);
+		inode_map->num_range_node_inode--;
+		goto block_found;
+	}
+	if ((ino == i->range_low) && (ino < i->range_high)) {
+		i->range_low = ino + 1;
+		goto block_found;
+	}
+	if ((ino > i->range_low) && (ino == i->range_high)) {
+		i->range_high = ino - 1;
+		goto block_found;
+	}
+	if ((ino > i->range_low) && (ino < i->range_high)) {
+		curr_node = opensimfs_alloc_inode_node(sb);
+		if (curr_node == NULL) {
+			goto block_found;
+		}
+		curr_node->range_low = ino + 1;
+		curr_node->range_high = i->range_high;
+		i->range_high = ino - 1;
+		ret = opensimfs_insert_inode_tree(sbi, curr_node);
+		if (ret) {
+			opensimfs_free_inode_node(sb, curr_node);
+			goto err;
+		}
+		inode_map->num_range_node_inode++;
+		goto block_found;
+	}
+
+err:
+	mutex_unlock(&inode_map->inode_table_mutex);
+	return ret;
+
+block_found:
+	sbi->s_inodes_used_count--;
+	inode_map->freed++;
+	mutex_unlock(&inode_map->inode_table_mutex);
+	return ret;
+}
+
+static int opensimfs_free_inode(
+	struct inode *inode,
+	struct opensimfs_inode_info_header *sih)
+{
+	struct super_block *sb = inode->i_sb;
+	struct opensimfs_inode *pi;
+	int err = 0;
+
+	pi = opensimfs_get_inode(sb, inode);
+	if (pi->valid) {
+		pi->valid = 0;
+	}
+
+	if (pi->opensimfs_ino != inode->i_ino) {
+	}
+
+	pi->i_blocks = 0;
+	sih->i_mode = 0;
+	sih->pi_addr = 0;
+	sih->i_size = 0;
+
+	err = opensimfs_free_inuse_inode(sb, pi->opensimfs_ino);
+
+	return err;
+}
+
 void opensimfs_evict_inode(
 	struct inode *inode)
 {
+	struct super_block *sb = inode->i_sb;
+	struct opensimfs_inode *pi = opensimfs_get_inode(sb, inode);
+	struct opensimfs_inode_info *si = OPENSIMFS_I(inode);
+	struct opensimfs_inode_info_header *sih = &si->header;
+	int destroy = 0;
+	int err = 0;
+
+	if (!sih) {
+		/* FIXME error handling */
+		goto out;
+	}
+
+	if (!inode->i_nlink && !is_bad_inode(inode)) {
+		if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
+			goto out;
+
+		destroy = 1;
+		switch (inode->i_mode & S_IFMT) {
+		case S_IFREG:
+			break;
+		case S_IFDIR:
+			break;
+		case S_IFLNK:
+			break;
+		default:
+			break;
+		}
+		err = opensimfs_free_inode(inode, sih);
+		if (err) {
+			goto out;
+		}
+		pi = NULL;
+
+		inode->i_mtime = inode->i_ctime = CURRENT_TIME_SEC;
+		inode->i_size = 0;
+	}
+out:
+	if (destroy == 0)
+		; /* FIXME free-up trees */
+
+	truncate_inode_pages(&inode->i_data, 0);
+	clear_inode(inode);
 }
 
 int opensimfs_notify_change(

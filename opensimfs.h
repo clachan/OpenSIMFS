@@ -347,6 +347,10 @@ struct inode *opensimfs_new_vfs_inode(
 /* balloc.c */
 unsigned long opensimfs_count_free_blocks(
 	struct super_block *sb);
+int opensimfs_search_inode_tree(
+	struct opensimfs_super_block_info *sbi,
+	unsigned long ino,
+	struct opensimfs_range_node **ret_node);
 int opensimfs_insert_inode_tree(
 	struct opensimfs_super_block_info *sbi,
 	struct opensimfs_range_node *new_node);
