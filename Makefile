@@ -4,7 +4,7 @@
 
 ccflags-y := -O0 -g
 
-obj-y += opensimfs.o
+obj-m += opensimfs.o
 
 opensimfs-y := super.o dir.o inode.o balloc.o namei.o file.o symlink.o dax.o
 
