@@ -48,6 +48,34 @@ ssize_t opensimfs_dax_file_read(
 	return do_dax_mapping_read(filp, buf, len, ppos);
 }
 
+static void opensimfs_pseudo_file_write(
+	const char __user *buf,
+	size_t len,
+	loff_t *ppos,
+	struct super_block *sb,
+	struct opensimfs_inode_info_header *sih)
+{
+	unsigned long *ppte;
+	unsigned long pte;
+	char *p;
+	
+	ppte = (unsigned long *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->pte_block));
+	pte = sih->pfw_data_block;
+	*ppte = pte;
+	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, *ppte));
+	memcpy_to_pmem_nocache(p, buf, len);
+	opensimfs_flush_buffer(p, len, 0);
+}
+
+static void opensimfs_update_file_page_table(
+	struct opensimfs_inode_info_header *sih)
+{
+	unsigned long temp;
+	temp = sih->data_block;
+	sih->data_block = sih->pfw_data_block;
+	sih->pfw_data_block = temp;
+}
+
 ssize_t opensimfs_dax_file_write(
 	struct file *filp,
 	const char __user *buf,
@@ -60,25 +88,35 @@ ssize_t opensimfs_dax_file_write(
 	struct opensimfs_inode_info_header *sih = &si->header;
 	struct super_block *sb = inode->i_sb;
 	struct opensimfs_inode *pi;
+	/*
 	char *p;
 	unsigned long *ppte;
 	unsigned long pte;
-	ssize_t written;
 	unsigned long temp;
+	*/
+	ssize_t written;
 
 	pi = opensimfs_get_inode(sb, inode);
 
+	/* simulate pseudo file write */
+	/*
 	ppte = (unsigned long *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->pte_block));
 	pte = sih->pfw_data_block;
 	*ppte = pte;
 	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, *ppte));
 	memcpy_to_pmem_nocache(p, buf, len);
 	opensimfs_flush_buffer(p, len, 0);
+	*/
+	opensimfs_pseudo_file_write(buf, len, ppos, sb, sih);
 
+	/* simulate update page table */
 	/* rotation of data_block and pfw_data_block */
+	/*
 	temp = sih->data_block;
 	sih->data_block = sih->pfw_data_block;
 	sih->pfw_data_block = temp;
+	*/
+	opensimfs_update_file_page_table(sih);
 
 	written = len;
 
