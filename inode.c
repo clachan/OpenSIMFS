@@ -3,6 +3,9 @@
 #include <linux/mm.h>
 #include "opensimfs.h"
 
+unsigned int opensimfs_blk_type_to_shift[OPENSIMFS_BLOCK_TYPE_MAX] = { 12, 21, 30 };
+uint32_t opensimfs_blk_type_to_size[OPENSIMFS_BLOCK_TYPE_MAX] = { 0x1000, 0x200000, 0x40000000 };
+
 struct address_space_operations opensimfs_aops_dax = {
 };
 
@@ -58,18 +61,18 @@ int opensimfs_init_inode_table(
 	pi->i_links_count = cpu_to_le16(1);
 	pi->i_flags = 0;
 	pi->opensimfs_ino = OPENSIMFS_INODETABLE_INO;
-	opensimfs_flush_buffer(pi, sizeof(*pi), 0);
+	pi->i_blk_type = OPENSIMFS_BLOCK_TYPE_2M;
 
 	inode_table = opensimfs_get_inode_table(sb);
 	if (!inode_table)
 		return -EINVAL;
 
-	allocated = opensimfs_new_blocks(sb, &blocknr, 1, 1);
+	allocated = opensimfs_new_log_blocks(sb, pi, &blocknr, 1, 1);
 	if (allocated != 1 || blocknr == 0)
 		return -ENOSPC;
 
-	block = opensimfs_get_block_offset(sb, blocknr);
-	inode_table->inode_block = block;
+	block = opensimfs_get_block_offset(sb, blocknr, pi->i_blk_type);
+	inode_table->log_head = block;
 	opensimfs_flush_buffer(inode_table, CACHELINE_SIZE, 0);
 
 	PERSISTENT_BARRIER();
@@ -96,7 +99,7 @@ int opensimfs_get_inode_address(
 	int allocated;
 
 	pi = opensimfs_get_special_inode(sb, OPENSIMFS_INODETABLE_INO);
-	data_bits = 12;
+	data_bits = opensimfs_blk_type_to_shift[pi->i_blk_type];
 	num_inodes_bits = data_bits - OPENSIMFS_INODE_BITS;
 
 	internal_ino = ino;
@@ -105,7 +108,7 @@ int opensimfs_get_inode_address(
 	superpage_count = internal_ino >> num_inodes_bits;
 	index = internal_ino & ((1 << num_inodes_bits) - 1);
 
-	curr = inode_table->inode_block;
+	curr = inode_table->log_head;
 	if (curr == 0)
 		return -EINVAL;
 
@@ -114,18 +117,18 @@ int opensimfs_get_inode_address(
 			return -EINVAL;
 
 		curr_addr = (unsigned long)opensimfs_get_block(sb, curr);
-		curr_addr += 4096 - 8;
+		curr_addr += 2097152 - 8;
 		curr = *(u64 *)(curr_addr);
 
 		if (curr == 0) {
 			if (extendable == 0)
 				return -EINVAL;
 
-			allocated = opensimfs_new_blocks(sb, &blocknr, 1, 1);
+			allocated = opensimfs_new_log_blocks(sb, pi, &blocknr, 1, 1);
 			if (allocated != 1)
 				return allocated;
 
-			curr = opensimfs_get_block_offset(sb, blocknr);
+			curr = opensimfs_get_block_offset(sb, blocknr, pi->i_blk_type);
 			*(u64 *)(curr_addr) = curr;
 			opensimfs_flush_buffer((void *)curr_addr, OPENSIMFS_INODE_SIZE, 1);
 		}
@@ -216,19 +219,6 @@ static int opensimfs_read_inode(
 bad_inode:
 	make_bad_inode(inode);
 	return ret;
-}
-
-static void opensimfs_init_header(
-	struct super_block *sb,
-	struct opensimfs_inode_info_header *sih,
-	u16 i_mode)
-{
-	sih->mmap_pages = 0;
-	sih->i_size = 0;
-	sih->pi_addr = 0;
-	INIT_RADIX_TREE(&sih->tree, GFP_ATOMIC);
-	INIT_RADIX_TREE(&sih->cache_tree, GFP_ATOMIC);
-	sih->i_mode = i_mode;
 }
 
 struct inode *opensimfs_iget(
@@ -458,27 +448,30 @@ int opensimfs_getattr(
 int opensimfs_new_blocks(
 	struct super_block *sb,
 	unsigned long *blocknr,
-	unsigned int num,
-	int zero)
+	unsigned int num_blocks,
+	unsigned short btype,
+	int zero,
+	enum alloc_type atype)
 {
 	struct opensimfs_free_list *free_list;
 	void *bp;
-	unsigned long num_blocks = 0;
 	unsigned long ret_blocks = 0;
 	unsigned long new_blocknr = 0;
 	struct rb_node *temp;
 	struct opensimfs_range_node *first;
+	unsigned long _num_blocks;
 
-	num_blocks = num;
-	if (num_blocks == 0)
+	_num_blocks = num_blocks * opensimfs_get_num_blocks(btype);
+
+	if (_num_blocks == 0)
 		return -EINVAL;
 
 	free_list = opensimfs_get_shared_free_list(sb);
 	spin_lock(&free_list->s_lock);
 
-	if (free_list->num_free_blocks < num_blocks ||
+	if (free_list->num_free_blocks < _num_blocks ||
 		!free_list->first_node) {
-		if (free_list->num_free_blocks >= num_blocks) {
+		if (free_list->num_free_blocks >= _num_blocks) {
 			temp = rb_first(&free_list->block_free_tree);
 			first = container_of(temp, struct opensimfs_range_node, node);
 			free_list->first_node = first;
@@ -490,10 +483,15 @@ int opensimfs_new_blocks(
 	}
 
 	ret_blocks = opensimfs_alloc_blocks_in_free_list(
-		sb, free_list, num_blocks, &new_blocknr);
+		sb, free_list, _num_blocks, &new_blocknr);
 
-	free_list->alloc_data_count++;
-	free_list->alloc_data_pages += ret_blocks;
+	if (atype == LOG) {
+		free_list->alloc_log_count++;
+		free_list->alloc_log_pages += ret_blocks;
+	} else if (atype == DATA) {
+		free_list->alloc_data_count++;
+		free_list->alloc_data_pages += ret_blocks;
+	}
 
 	spin_unlock(&free_list->s_lock);
 
@@ -503,12 +501,12 @@ int opensimfs_new_blocks(
 	if (zero) {
 		bp = opensimfs_get_block(
 			sb,
-			opensimfs_get_block_offset(sb, new_blocknr));
+			opensimfs_get_block_offset(sb, new_blocknr, btype));
 		memset_nt(bp, 0, PAGE_SIZE * ret_blocks);
 	}
 	*blocknr = new_blocknr;
 
-	return ret_blocks / 1;
+	return ret_blocks / opensimfs_get_num_blocks(btype);
 }
 
 static int opensimfs_alloc_unused_inode(
@@ -698,6 +696,8 @@ struct inode *opensimfs_new_vfs_inode(
 	}
 
 	pi->i_flags = opensimfs_mask_flags(mode, diri->i_flags);
+	pi->log_head = 0;
+	pi->log_tail = 0;
 	pi->opensimfs_ino = ino;
 
 	si = OPENSIMFS_I(inode);
@@ -706,10 +706,10 @@ struct inode *opensimfs_new_vfs_inode(
 	sih->pi_addr = pi_addr;
 	sih->ino = ino;
 
-	opensimfs_new_blocks(sb, &sih->pte_block, 1, 1);
-	opensimfs_new_blocks(sb, &sih->data_block, 1, 1);
-	opensimfs_new_blocks(sb, &sih->pfw_pte_block, 1, 1);
-	opensimfs_new_blocks(sb, &sih->pfw_data_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->pte_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
+	opensimfs_new_blocks(sb, &sih->data_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
+	opensimfs_new_blocks(sb, &sih->pfw_pte_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
+	opensimfs_new_blocks(sb, &sih->pfw_data_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
 
 	opensimfs_update_inode(inode, pi);
 	opensimfs_set_inode_flags(inode, pi, le32_to_cpu(pi->i_flags));
@@ -727,4 +727,206 @@ fail1:
 	iput(inode);
 fail2:
 	return ERR_PTR(errval);
+}
+
+static int opensimfs_coalesce_log_pages(
+	struct super_block *sb,
+	unsigned long prev_blocknr,
+	unsigned long first_blocknr,
+	unsigned long num_pages)
+{
+	unsigned long next_blocknr;
+	u64 curr_block, next_page;
+	struct opensimfs_inode_log_page *curr_page;
+	int i;
+
+	if (prev_blocknr) {
+		/* Link previous block and newly allocated head block */
+		curr_block = opensimfs_get_block_offset(sb, prev_blocknr,
+			OPENSIMFS_BLOCK_TYPE_4K);
+		curr_page = (struct opensimfs_inode_log_page *)
+			opensimfs_get_block(sb, curr_block);
+		next_page = opensimfs_get_block_offset(sb, first_blocknr,
+			OPENSIMFS_BLOCK_TYPE_4K);
+		opensimfs_set_next_log_page_address(sb, curr_page, next_page, 0);
+	}
+
+	next_blocknr = first_blocknr + 1;
+	curr_block = opensimfs_get_block_offset(sb,
+		first_blocknr, OPENSIMFS_BLOCK_TYPE_4K);
+	curr_page = (struct opensimfs_inode_log_page *)opensimfs_get_block(sb, curr_block);
+	for (i = 0; i < num_pages - 1; i++) {
+		next_page = opensimfs_get_block_offset(sb, next_blocknr,
+			OPENSIMFS_BLOCK_TYPE_4K);
+		opensimfs_set_next_log_page_address(sb, curr_page, next_page, 0);
+		curr_page++;
+		next_blocknr++;
+	}
+
+	/* Last page */
+	opensimfs_set_next_log_page_address(sb, curr_page, 0, 1);
+	return 0;
+}
+
+/* Log block resides in NVMM */
+int opensimfs_allocate_inode_log_pages(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	unsigned long num_pages,
+	u64 *new_block)
+{
+	unsigned long new_inode_blocknr;
+	unsigned long first_blocknr;
+	unsigned long prev_blocknr;
+	int allocated;
+	int ret_pages = 0;
+
+	allocated = opensimfs_new_log_blocks(
+		sb, pi, &new_inode_blocknr, num_pages, 0);
+
+	if (allocated <= 0) {
+		/* FIXME error handling */
+		return allocated;
+	}
+	ret_pages += allocated;
+	num_pages -= allocated;
+
+	/* coalesce the pages */
+	opensimfs_coalesce_log_pages(sb, 0, new_inode_blocknr, allocated);
+	first_blocknr = new_inode_blocknr;
+	prev_blocknr = new_inode_blocknr + allocated - 1;
+
+	while (num_pages) {
+		allocated = opensimfs_new_log_blocks(sb, pi,
+			&new_inode_blocknr, num_pages, 0);
+
+		if (allocated <= 0) {
+			break;
+		}
+		ret_pages += allocated;
+		num_pages -= allocated;
+		opensimfs_coalesce_log_pages(sb, prev_blocknr, new_inode_blocknr, allocated);
+		prev_blocknr = new_inode_blocknr + allocated - 1;
+	}
+
+	*new_block = opensimfs_get_block_offset(sb, first_blocknr,
+		pi->i_blk_type);
+
+	return ret_pages;
+}
+
+static void opensimfs_set_next_page_flag(
+	struct super_block *sb,
+	u64 curr_p)
+{
+	void *p;
+
+	if (LOG_ENTRY_LOC(curr_p) >= LOG_LAST_ENTRY)
+		return;
+
+	p = opensimfs_get_block(sb, curr_p);
+	opensimfs_set_entry_type(p, LOG_NEXT_PAGE);
+	opensimfs_flush_buffer(p, CACHELINE_SIZE, 1);
+}
+
+static u64 opensimfs_extend_inode_log(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	struct opensimfs_inode_info_header *sih,
+	u64 curr_p)
+{
+	u64 new_block;
+	int allocated;
+	unsigned long num_pages;
+
+	if (curr_p == 0) {
+		allocated = opensimfs_allocate_inode_log_pages(sb, pi,
+			1, &new_block);
+		if (allocated != 1) {
+			return 0;
+		}
+		pi->log_tail = new_block;
+		opensimfs_flush_buffer(&pi->log_tail, CACHELINE_SIZE, 0);
+		pi->log_head = new_block;
+		sih->num_log_pages = 1;
+		pi->i_blocks++;
+		opensimfs_flush_buffer(&pi->log_head, CACHELINE_SIZE, 1);
+	} else {
+		num_pages = sih->num_log_pages >= LOG_EXTENDED_THRESHOLD ?
+			LOG_EXTENDED_THRESHOLD : sih->num_log_pages;
+		allocated = opensimfs_allocate_inode_log_pages(sb, pi,
+			num_pages, &new_block);
+		if (allocated <= 0) {
+			return 0;
+		}
+
+		/* FIXME opensimfs_inode_log_fast_gc */
+	}
+	return new_block;
+}
+
+static u64 opensimfs_append_one_log_page(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	u64 curr_p)
+{
+	struct opensimfs_inode_log_page *curr_page;
+	u64 new_block;
+	u64 curr_block;
+	int allocated;
+
+	allocated = opensimfs_allocate_inode_log_pages(sb, pi, 1, &new_block);
+	if (allocated != 1) {
+		return 0;
+	}
+
+	if (curr_p == 0) {
+		curr_p = new_block;
+	} else {
+		curr_block = LOG_BLOCK_OFFSET(curr_p);
+		curr_page = (struct opensimfs_inode_log_page *)
+			opensimfs_get_block(sb, curr_block);
+		opensimfs_set_next_log_page_address(sb, curr_page, new_block, 1);
+	}
+
+	return curr_p;
+}
+
+u64 opensimfs_get_log_append_head(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	struct opensimfs_inode_info_header *sih,
+	u64 tail,
+	size_t size,
+	int *extended)
+{
+	u64 curr_p;
+
+	if (tail)
+		curr_p = tail;
+	else
+		curr_p = pi->log_tail;
+
+	if (curr_p == 0 || (opensimfs_is_last_entry(curr_p, size) &&
+		opensimfs_next_log_page(sb, curr_p) == 0)) {
+		if (opensimfs_is_last_entry(curr_p, size))
+			opensimfs_set_next_page_flag(sb, curr_p);
+
+		if (sih) {
+			curr_p = opensimfs_extend_inode_log(sb, pi, sih, curr_p);
+		} else {
+			curr_p = opensimfs_append_one_log_page(sb, pi, curr_p);
+			*extended = 1;
+		}
+
+		if (curr_p == 0)
+			return 0;
+	}
+
+	if (opensimfs_is_last_entry(curr_p, size)) {
+		opensimfs_set_next_page_flag(sb, curr_p);
+		curr_p = opensimfs_next_log_page(sb, curr_p);
+	}
+
+	return curr_p;
 }

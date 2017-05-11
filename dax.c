@@ -28,9 +28,10 @@ static ssize_t do_dax_mapping_read(
 
 	pi = opensimfs_get_inode(sb, inode);
 
-	ppte = (unsigned long *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->pte_block));
+	ppte = (unsigned long *)opensimfs_get_block(sb,
+		opensimfs_get_block_offset(sb, sih->pte_block, OPENSIMFS_BLOCK_TYPE_4K));
 	pte = *ppte;
-	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, pte));
+	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, pte, OPENSIMFS_BLOCK_TYPE_4K));
 
 	__copy_to_user(buf, p, inode->i_size);
 	*ppos += isize;
@@ -59,10 +60,11 @@ static void opensimfs_pseudo_file_write(
 	unsigned long pte;
 	char *p;
 	
-	ppte = (unsigned long *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, sih->pte_block));
+	ppte = (unsigned long *)opensimfs_get_block(sb,
+		opensimfs_get_block_offset(sb, sih->pte_block, OPENSIMFS_BLOCK_TYPE_4K));
 	pte = sih->pfw_data_block;
 	*ppte = pte;
-	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, *ppte));
+	p = (char *)opensimfs_get_block(sb, opensimfs_get_block_offset(sb, *ppte, OPENSIMFS_BLOCK_TYPE_4K));
 	memcpy_to_pmem_nocache(p, buf, len);
 	opensimfs_flush_buffer(p, len, 0);
 }

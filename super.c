@@ -91,6 +91,8 @@ static void opensimfs_set_default_opts(
 	set_mount_opt(sbi->s_mount_opt, OPENSIMFS_MOUNT_HUGEIOREMAP);
 	set_mount_opt(sbi->s_mount_opt, OPENSIMFS_MOUNT_ERRORS_CONT);
 	sbi->reserved_blocks = OPENSIMFS_RESERVED_BLOCKS;
+	/* sbi->cpus = num_online_cpis(); */
+	sbi->cpus = 1;
 }
 
 static void opensimfs_set_blocksize(
@@ -168,8 +170,12 @@ static struct opensimfs_inode *opensimfs_init(
 	super->s_magic = cpu_to_le32(OPENSIMFS_SUPER_MAGIC);
 
 	opensimfs_init_blockmap(sb);
-	opensimfs_init_inode_inuse_list(sb);
-	opensimfs_init_inode_table(sb);
+	if (opensimfs_journal_hard_init(sb) < 0)
+		return ERR_PTR(-EINVAL);
+	if (opensimfs_init_inode_inuse_list(sb) < 0)
+		return ERR_PTR(-EINVAL);
+	if (opensimfs_init_inode_table(sb) < 0)
+		return ERR_PTR(-EINVAL);
 	
 	opensimfs_flush_buffer(super, OPENSIMFS_SB_SIZE, false);
 	opensimfs_flush_buffer(
@@ -182,6 +188,7 @@ static struct opensimfs_inode *opensimfs_init(
 	root_i->i_uid = cpu_to_le32(from_kuid(&init_user_ns, sbi->uid));
 	root_i->i_gid = cpu_to_le32(from_kgid(&init_user_ns, sbi->gid));
 	root_i->i_links_count = cpu_to_le16(2);
+	root_i->i_blk_type = OPENSIMFS_BLOCK_TYPE_4K;
 	root_i->i_flags = 0;
 	root_i->i_blocks = cpu_to_le64(1);
 	root_i->i_size = cpu_to_le64(sb->s_blocksize);
@@ -189,6 +196,7 @@ static struct opensimfs_inode *opensimfs_init(
 		cpu_to_le32(get_seconds());
 	root_i->opensimfs_ino = OPENSIMFS_ROOT_INO;
 	root_i->valid = 1;
+
 	opensimfs_flush_buffer(root_i, sizeof(*root_i), false);
 
 	PERSISTENT_MARK();
@@ -448,13 +456,13 @@ setup_sb:
 	si = OPENSIMFS_I(root_i);
 	sih = &si->header;
 
-	opensimfs_new_blocks(sb, &sih->pte_block, 1, 1);
-	opensimfs_new_blocks(sb, &sih->data_block, 1, 1);
-	opensimfs_new_blocks(sb, &sih->pfw_pte_block, 1, 1);
-	opensimfs_new_blocks(sb, &sih->pfw_data_block, 1, 1);
+	opensimfs_new_blocks(sb, &sih->pte_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
+	opensimfs_new_blocks(sb, &sih->data_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
+	opensimfs_new_blocks(sb, &sih->pfw_pte_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
+	opensimfs_new_blocks(sb, &sih->pfw_data_block, 1, OPENSIMFS_BLOCK_TYPE_4K, 1, DATA);
 
 	opensimfs_append_dir_init_entries(
-		sb, root_i, OPENSIMFS_ROOT_INO, OPENSIMFS_ROOT_INO);
+		sb, root_pi, OPENSIMFS_ROOT_INO, OPENSIMFS_ROOT_INO);
 
 	sb->s_root = d_make_root(root_i);
 	if (!sb->s_root) {
@@ -473,6 +481,11 @@ setup_sb:
 
 out:
 	kfree(sbi);
+
+	if (sbi->journal_locks) {
+		kfree(sbi->journal_locks);
+		sbi->journal_locks = NULL;
+	}
 
 	return retval;
 }

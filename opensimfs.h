@@ -4,6 +4,7 @@
 #include <linux/radix-tree.h>
 #include <linux/rbtree.h>
 #include <linux/uaccess.h>
+#include <linux/fs.h>
 
 #define OPENSIMFS_SUPER_MAGIC 0x4F53494D /* 'O' 'S' 'I' 'M' */
 
@@ -31,7 +32,7 @@
 #define OPENSIMFS_INODETABLE_INO     2 /* Temporaty inode table */
 #define OPENSIMFS_BLOCKNODE_INO      3
 #define OPENSIMFS_INODELIST_INO      4
-#define OPENSIMFS_LITEJOURNAL_INO    5
+#define OPENSIMFS_JOURNAL_INO		5
 #define OPENSIMFS_INODELIST1_INO     6
 
 #define OPENSIMFS_ROOT_INODE_START   (OPENSIMFS_SB_SIZE * 2)
@@ -44,9 +45,16 @@
 
 #define OPENSIMFS_NAME_LEN           255
 
+/* OPENSIMFS suppoered data blocks */
+#define OPENSIMFS_BLOCK_TYPE_4K 0
+#define OPENSIMFS_BLOCK_TYPE_2M 1
+#define OPENSIMFS_BLOCK_TYPE_1G 2
+#define OPENSIMFS_BLOCK_TYPE_MAX 3
+
 struct opensimfs_inode {
 	__le16  i_reserved;
 	u8	valid;
+	u8	i_blk_type;
 	__le32  i_flags;
 	__le64  i_size;		 /* size */
 	__le32  i_ctime;
@@ -64,6 +72,9 @@ struct opensimfs_inode {
 	__le32  padding;
 	__le64  opensimfs_ino;
 
+	__le64  log_head;
+	__le64  log_tail;
+
 	struct {
 		__le32 rdev;
 	} dev;
@@ -73,12 +84,13 @@ struct opensimfs_inode_info_header {
 	struct radix_tree_root tree;
 	struct radix_tree_root cache_tree;
 	unsigned short i_mode;
+	unsigned long num_log_pages;
 	unsigned long i_size;
 	unsigned long ino;
 	unsigned long pi_addr;
-	unsigned long mmap_pages;
+	unsigned long num_mmap_pages;
 	u64 last_setattr;
-	u64	last_link_change;
+	u64 last_link_change;
 
 	unsigned long pte_block;
 	unsigned long data_block;
@@ -92,7 +104,7 @@ struct opensimfs_inode_info {
 };
 
 struct opensimfs_inode_table {
-	__le64 inode_block;
+	__le64 log_head;
 };
 
 static inline struct opensimfs_inode_info *OPENSIMFS_I(struct inode *inode)
@@ -113,7 +125,8 @@ struct opensimfs_free_list {
 	unsigned long alloc_log_count;
 	unsigned long alloc_data_count;
 	unsigned long free_log_count;
-	unsigned long free_Data_count;
+	unsigned long free_data_count;
+	unsigned long alloc_log_pages;
 	unsigned long alloc_data_pages;
 	unsigned long free_data_pages;
 	unsigned long freed_log_pages;
@@ -152,6 +165,7 @@ struct opensimfs_super_block_info {
 	 */
 	phys_addr_t	 phys_addr;
 	void             *virt_addr;
+	int              cpus;
 	
 	/* mount options */
 	unsigned long   num_blocks;
@@ -167,6 +181,7 @@ struct opensimfs_super_block_info {
 	unsigned long   reserved_blocks;
 
 	struct mutex	s_lock;
+	spinlock_t	*journal_locks;
 
 	struct opensimfs_free_list shared_free_list;
 	struct opensimfs_inode_map inode_map;
@@ -174,9 +189,10 @@ struct opensimfs_super_block_info {
 
 #define OPENSIMFS_DIR_PAD	8
 #define OPENSIMFS_DIR_ROUND	(OPENSIMFS_DIR_PAD - 1)
-#define OPENSIMFS_DIR_LEN(name_len) (((name_len) + 28 + OPENSIMFS_DIR_ROUND) & ~OPENSIMFS_DIR_ROUND)
+#define OPENSIMFS_DIR_LOG_REC_LEN(name_len) (((name_len) + 28 + OPENSIMFS_DIR_ROUND) & ~OPENSIMFS_DIR_ROUND)
 
 struct opensimfs_dentry {
+	u8		entry_type;
 	u8		name_len;
 	u8		file_type;
 	u8		invalid;
@@ -193,6 +209,57 @@ struct opensimfs_range_node {
 	unsigned long range_low;
 	unsigned long range_high;
 };
+
+enum opensimfs_log_entry_type {
+	FILE_WRITE = 1,
+	DIR_LOG,
+	SET_ATTR,
+	LINK_CHANGE,
+	LOG_NEXT_PAGE,
+};
+
+static inline u8 opensimfs_get_log_entry_type(
+	void *p)
+{
+	return *(u8 *)p;
+}
+
+static inline void opensimfs_set_entry_type(
+	void *p,
+	enum opensimfs_log_entry_type type)
+{
+	*(u8 *)p = type;
+}
+
+struct opensimfs_file_write_entry {
+	__le64 block;
+	__le64 pgoff;
+	__le32 num_pages;
+	__le32 invalid_pages;
+	__le32 mtime;
+	__le32 padding;
+	__le64 size;
+} __attribute((__packed__));
+
+#define INVALID_MASK 4095
+#define LOG_BLOCK_OFFSET(p) ((p) & ~INVALID_MASK)
+#define LOG_ENTRY_LOC(p) ((p) & INVALID_MASK)
+
+struct opensimfs_inode_log_page_tail {
+	__le64 padding1;
+	__le64 padding2;
+	__le64 padding3;
+	__le64 next_page;
+} __attribute((__packed__));
+
+#define LOG_LAST_ENTRY 4064
+#define LOG_PAGE_TAIL(p) (((p) & ~INVALID_MASK) + LOG_LAST_ENTRY)
+
+/* Fit in PAGE_SIZE */
+struct opensimfs_inode_log_page {
+	char padding[LOG_LAST_ENTRY];
+	struct opensimfs_inode_log_page_tail page_tail;
+} __attribute((__packed__));
 
 // BKDR String Hash Function
 static inline unsigned long BKDRHash(const char *str, int length)
@@ -235,8 +302,17 @@ static inline struct opensimfs_free_list *opensimfs_get_shared_free_list(
 	return &sbi->shared_free_list;
 }
 
+static inline u64 opensimfs_get_address_offset(
+	struct opensimfs_super_block_info *sbi,
+	void *addr)
+{
+	return (u64)(addr - sbi->virt_addr);
+}
+
 static inline u64 opensimfs_get_block_offset(
-	struct super_block *sb, unsigned long blocknr)
+	struct super_block *sb,
+	unsigned long blocknr,
+	unsigned short btype)
 {
 	return (u64)blocknr << PAGE_SHIFT;
 }
@@ -262,6 +338,18 @@ static inline struct opensimfs_inode_table *opensimfs_get_inode_table(
 #define set_mount_opt(o, opt)   (o |= opt)
 #define test_mount_opt(sb, opt) (OPENSIMFS_SB(sb)->s_mount_opt & opt)
 
+/* bbuild.c */
+void opensimfs_init_header(
+	struct super_block *sb,
+	struct opensimfs_inode_info_header *sih,
+	u16 i_mode);
+int opensimfs_new_log_blocks(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	unsigned long *new_blocknr,
+	unsigned num_blocks,
+	int zero);
+
 /* super.c */
 struct opensimfs_inode *opensimfs_get_basic_inode(
 	struct super_block *sb,
@@ -283,13 +371,15 @@ void opensimfs_free_inode_node(
 /* dir.c */
 int opensimfs_append_dir_init_entries(
 	struct super_block *sb,
-	struct inode *inodepi,
+	struct opensimfs_inode *pi,
 	u64 self_ino,
 	u64 parent_ino);
 int opensimfs_add_dentry(
 	struct dentry *dentry,
 	u64 ino,
-	int inc_link);
+	int inc_link,
+	u64 tail,
+	u64 *new_tail);
 
 /* inode.c */
 int opensimfs_init_inode_inuse_list(
@@ -319,15 +409,25 @@ int opensimfs_getattr(
 	struct vfsmount *mnt,
 	struct dentry *dentry,
 	struct kstat *stat);
+enum alloc_type {
+	LOG = 1,
+	DATA,
+};
 int opensimfs_new_blocks(
 	struct super_block *sb,
 	unsigned long *blocknr,
-	unsigned int num,
-	int zero);
+	unsigned int num_blocks,
+	unsigned short btype,
+	int zero,
+	enum alloc_type atype);
 u64 opensimfs_new_opensimfs_inode(
 	struct super_block *sb,
 	u64 *pi_addr);
-
+int opensimfs_allocate_inode_log_pages(
+	struct super_block *sb,
+	struct opensimfs_inode *inode,
+	unsigned long num_pages,
+	u64 *new_block);
 enum opensimfs_new_inode_type {
 	TYPE_CREATE = 0,
 	TYPE_MKNOD,
@@ -343,6 +443,13 @@ struct inode *opensimfs_new_vfs_inode(
 	size_t size,
 	dev_t rdev,
 	const struct qstr *qstr);
+u64 opensimfs_get_log_append_head(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	struct opensimfs_inode_info_header *sih,
+	u64 tail,
+	size_t size,
+	int *extended);
 
 /* balloc.c */
 unsigned long opensimfs_count_free_blocks(
@@ -380,6 +487,32 @@ ssize_t opensimfs_dax_file_write(
 int opensimfs_dax_file_mmap(
 	struct file *file,
 	struct vm_area_struct *vma);
+
+/* journal.c */
+struct opensimfs_journal_entry {
+	u64 addrs[4];
+	u64 values[4];
+};
+
+int opensimfs_journal_soft_init(
+	struct super_block *sb);
+int opensimfs_journal_hard_init(
+	struct super_block *sb);
+u64 opensimfs_create_journal_transaction(
+	struct super_block *sb,
+	struct opensimfs_journal_entry *dram_entry1,
+	struct opensimfs_journal_entry *dram_entry2,
+	int entries,
+	int cpu);
+void opensimfs_commit_journal_transaction(
+	struct super_block *sb,
+	u64 tail,
+	int cpu);
+
+struct journal_ptr_pair {
+	__le64 journal_head;
+	__le64 journal_tail;
+};
 
 /* Flags that should be inherited by new inodes from their parent. */
 #define OPENSIMFS_FL_INHERITED \
@@ -442,7 +575,7 @@ static inline void memset_nt(void *dest, uint32_t dword, size_t length)
 		: "=D"(dummy1), "=d" (dummy2) : "D" (dest), "a" (qword), "d" (length) : "memory", "rcx");
 }
 
-/* ======================= Write ordering ========================= */
+/* ======================= Write ordering (begin) ================= */
 
 #define CACHELINE_SIZE  (64)
 #define CACHELINE_MASK  (~(CACHELINE_SIZE - 1))
@@ -521,6 +654,94 @@ static inline int memcpy_to_pmem_nocache(
 	unsigned int size)
 {
 	return __copy_from_user_inatomic_nocache(dst, src, size);
+}
+
+/* ======================= Write ordering (end) =================== */
+
+static inline void opensimfs_set_next_log_page_address(
+	struct super_block *sb,
+	struct opensimfs_inode_log_page *curr_page,
+	u64 next_page,
+	int fence)
+{
+	curr_page->page_tail.next_page = next_page;
+	opensimfs_flush_buffer(&curr_page->page_tail,
+		sizeof(struct opensimfs_inode_log_page_tail), 0);
+	if (fence)
+		PERSISTENT_BARRIER();
+}
+
+static inline bool opensimfs_goto_next_log_page(
+	struct super_block *sb,
+	u64 curr_p)
+{
+	void *addr;
+	u8 type;
+
+	if (LOG_ENTRY_LOC(curr_p) + 32 > LOG_LAST_ENTRY)
+		return true;
+
+	addr = opensimfs_get_block(sb, curr_p);
+	type = opensimfs_get_log_entry_type(addr);
+	if (type == LOG_NEXT_PAGE)
+		return true;
+
+	return false;
+}
+
+static inline u64 opensimfs_next_log_page(
+	struct super_block *sb,
+	u64 curr_p)
+{
+	void *curr_addr = opensimfs_get_block(sb, curr_p);
+	unsigned long log_page_tail = ((unsigned long)curr_addr & ~INVALID_MASK)
+		+ LOG_LAST_ENTRY;
+	return ((struct opensimfs_inode_log_page_tail *)log_page_tail)->next_page;
+}
+
+static inline unsigned long opensimfs_get_num_blocks(
+	unsigned short btype)
+{
+	unsigned long num_blocks;
+	if (btype == OPENSIMFS_BLOCK_TYPE_4K) {
+		num_blocks = 1;
+	} else if (btype == OPENSIMFS_BLOCK_TYPE_2M) {
+		num_blocks = 512;
+	} else {
+		num_blocks = 0x40000;
+	}
+	return num_blocks;
+}
+
+static inline void opensimfs_update_log_tail(
+	struct opensimfs_inode *pi,
+	u64 new_log_tail)
+{
+	PERSISTENT_BARRIER();
+	pi->log_tail = new_log_tail;
+	opensimfs_flush_buffer(&pi->log_tail, CACHELINE_SIZE, 1);
+}
+
+static inline bool opensimfs_is_last_entry(u64 curr_p, size_t size)
+{
+	unsigned int entry_end;
+	entry_end = LOG_ENTRY_LOC(curr_p) + size;
+	return entry_end > LOG_LAST_ENTRY;
+}
+
+#define LOG_EXTENDED_THRESHOLD 256
+
+static inline struct journal_ptr_pair *opensimfs_get_journal_pointers(
+	struct super_block *sb,
+	int cpu)
+{
+	struct opensimfs_super_block_info *sbi = OPENSIMFS_SB(sb);
+
+	if (cpu >= sbi->cpus)
+		return NULL;
+
+	return (struct journal_ptr_pair *)((char *)opensimfs_get_block(sb,
+		OPENSIMFS_DEF_BLOCK_SIZE_4K) + cpu * CACHELINE_SIZE);
 }
 
 #endif
