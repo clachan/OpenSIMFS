@@ -229,3 +229,17 @@ inline int opensimfs_new_log_blocks(
 		pi->i_blk_type, zero, LOG);
 	return allocated;
 }
+
+inline int opensimfs_new_data_blocks(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	unsigned long *new_blocknr,
+	unsigned int num_blocks,
+	int zero)
+{
+	int allocated;
+	allocated = opensimfs_new_blocks(
+		sb, new_blocknr, num_blocks,
+		pi->i_blk_type, zero, DATA);
+	return allocated;
+}

@@ -930,3 +930,27 @@ u64 opensimfs_get_log_append_head(
 
 	return curr_p;
 }
+
+u64 opensimfs_append_file_write_entry(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	struct inode *inode,
+	struct opensimfs_file_write_entry *data,
+	u64 tail)
+{
+	struct opensimfs_inode_info *si = OPENSIMFS_I(inode);
+	struct opensimfs_inode_info_header *sih = &si->header;
+	struct opensimfs_file_write_entry *entry;
+	u64 curr_p;
+	int extended = 0;
+	size_t size = sizeof(struct opensimfs_file_write_entry);
+
+	curr_p = opensimfs_get_log_append_head(sb, pi, sih, tail, size, &extended);
+	if (curr_p == 0)
+		return curr_p;
+
+	entry = (struct opensimfs_file_write_entry *)opensimfs_get_block(sb, curr_p);
+	memcpy_to_pmem_nocache(entry, data, sizeof(struct opensimfs_file_write_entry));
+
+	return curr_p;
+}

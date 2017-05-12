@@ -349,6 +349,12 @@ int opensimfs_new_log_blocks(
 	unsigned long *new_blocknr,
 	unsigned num_blocks,
 	int zero);
+int opensimfs_new_data_blocks(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	unsigned long *new_blocknr,
+	unsigned num_blocks,
+	int zero);
 
 /* super.c */
 struct opensimfs_inode *opensimfs_get_basic_inode(
@@ -450,6 +456,12 @@ u64 opensimfs_get_log_append_head(
 	u64 tail,
 	size_t size,
 	int *extended);
+u64 opensimfs_append_file_write_entry(
+	struct super_block *sb,
+	struct opensimfs_inode *pi,
+	struct inode *inode,
+	struct opensimfs_file_write_entry *data,
+	u64 tail);
 
 /* balloc.c */
 unsigned long opensimfs_count_free_blocks(
@@ -742,6 +754,21 @@ static inline struct journal_ptr_pair *opensimfs_get_journal_pointers(
 
 	return (struct journal_ptr_pair *)((char *)opensimfs_get_block(sb,
 		OPENSIMFS_DEF_BLOCK_SIZE_4K) + cpu * CACHELINE_SIZE);
+}
+
+extern unsigned int opensimfs_blk_type_to_shift[OPENSIMFS_BLOCK_TYPE_MAX];
+extern uint32_t opensimfs_blk_type_to_size[OPENSIMFS_BLOCK_TYPE_MAX];
+
+static inline unsigned int opensimfs_inode_blk_shift(
+	struct opensimfs_inode *pi)
+{
+	return opensimfs_blk_type_to_shift[pi->i_blk_type];
+}
+
+static inline uint32_t  opensimfs_inode_blk_size(
+	struct opensimfs_inode *pi)
+{
+	return opensimfs_blk_type_to_size[pi->i_blk_type];
 }
 
 #endif
