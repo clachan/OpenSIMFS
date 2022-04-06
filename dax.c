@@ -36,11 +36,12 @@ static ssize_t do_dax_mapping_read(
 	p = (char *)opensimfs_get_block(sb,
 		opensimfs_get_block_offset(sb, pfn - sbi->phys_addr, OPENSIMFS_BLOCK_TYPE_4K));
 
-	__copy_to_user(buf, p, inode->i_size);
-	*ppos += isize;
+	p += *ppos;
+	__copy_to_user(buf, p, len);
+	*ppos += len;
 
 	file_accessed(filp);
-	return isize;
+	return len;
 }
 
 ssize_t opensimfs_dax_file_read(
